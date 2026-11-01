@@ -1,0 +1,68 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC (07:00 Vietnam time)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    name: Sync with Upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/earendil-works/pi.git || true
+          git fetch upstream main
+
+      - name: Check for new commits
+        id: check_sync
+        run: |
+          COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "Commits behind upstream: $COMMITS_BEHIND"
+          echo "behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+
+      - name: Rebase onto upstream/main
+        if: steps.check_sync.outputs.behind != '0'
+        run: |
+          git rebase upstream/main
+
+      - name: Setup Node.js
+        if: steps.check_sync.outputs.behind != '0'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies & Build
+        if: steps.check_sync.outputs.behind != '0'
+        run: |
+          npm ci --ignore-scripts || npm install
+          npx tsc -p packages/ai/tsconfig.build.json
+          npx tsc -p packages/coding-agent/tsconfig.build.json
+          node scripts/build-coding-agent-bundle.mjs
+
+      - name: Run Tests
+        if: steps.check_sync.outputs.behind != '0'
+        run: |
+          npx vitest run packages/ai/test/auth-pool.test.ts packages/coding-agent/test/auth-storage-pool.test.ts packages/ai/test/antigravity-provider.test.ts
+
+      - name: Push rebased branch
+        if: steps.check_sync.outputs.behind != '0'
+        run: |
+          git push origin main --force-with-lease
