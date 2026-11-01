@@ -12,6 +12,7 @@ export type Mode = "text" | "json" | "rpc";
 
 export interface Args {
 	provider?: string;
+	account?: string;
 	model?: string;
 	apiKey?: string;
 	systemPrompt?: string;
@@ -114,6 +115,8 @@ export function parseArgs(args: string[]): Args {
 			result.resume = true;
 		} else if (arg === "--provider" && i + 1 < args.length) {
 			result.provider = args[++i];
+		} else if (arg === "--account" && i + 1 < args.length) {
+			result.account = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
 			result.model = args[++i];
 		} else if (arg === "--api-key" && i + 1 < args.length) {
@@ -293,13 +296,14 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} update [source|self|pi]   Update pi, extensions, or model catalogs
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-  ${APP_NAME} auth <command>            Print credentials or check provider readiness
+  ${APP_NAME} auth <command>            Manage accounts, pools, credentials, or check provider readiness
   ${APP_NAME} mcp <command>             Manage MCP servers
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/mcp
 
 ${chalk.bold("Options:")}
   --provider <name>              Provider to search for --model (requires --model)
   --model <pattern>              Model pattern or ID (supports "provider/id" and optional ":<thinking>")
+  --account <accountId>          Account ID to use from provider's multi-account pool
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
@@ -348,6 +352,10 @@ ${chalk.bold("Options:")}
 Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 
 ${chalk.bold("Examples:")}
+  # Manage multi-account pool and switch active accounts
+  ${APP_NAME} auth accounts
+  ${APP_NAME} auth switch --provider antigravity --account <accountId>
+
   # Print a provider API key for an external client
   ${APP_NAME} auth print-api-key --provider openai
 

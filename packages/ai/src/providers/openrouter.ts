@@ -25,7 +25,14 @@ export async function personalizeOpenRouterCatalog(
 	catalog: readonly AnyModel[],
 	context: RefreshModelsContext,
 ): Promise<readonly AnyModel[]> {
-	const key = context.credential?.type === "oauth" ? context.credential.access : context.credential?.key;
+	let key: string | undefined;
+	const cred = context.credential;
+	if (cred?.type === "oauth") key = cred.access;
+	else if (cred?.type === "api_key") key = cred.key;
+	else if (cred?.type === "pool") {
+		const active = cred.accounts.find((a) => a.id === cred.activeId);
+		key = active?.credential.type === "oauth" ? active.credential.access : active?.credential.key;
+	}
 	if (!key) return catalog;
 	const response = await fetch(`${(context.baseUrl ?? OPENROUTER_BASE_URL).replace(/\/+$/, "")}/models/user`, {
 		headers: { accept: "application/json", authorization: `Bearer ${key}` },

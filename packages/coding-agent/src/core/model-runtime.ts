@@ -1,5 +1,7 @@
 import { dirname, join } from "node:path";
 import {
+	type AccountEntry,
+	type AccountPoolCredential,
 	type AnyModel,
 	type Api,
 	type ApiStreamOptions,
@@ -227,7 +229,7 @@ export class ModelRuntime implements Models {
 				: new InMemoryCodingAgentModelsStore());
 		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
 		const providers = builtinProviderCatalog.builtinProviders().map((provider) => {
-			if (provider.id === "radius") return provider;
+			if (provider.id === "radius" || provider.id === "antigravity") return provider;
 			// OpenRouter narrows the catalog to the models, limits and prices of the user's key.
 			if (provider.id === "openrouter") {
 				return withPersonalizedCatalog(
@@ -850,6 +852,107 @@ export class ModelRuntime implements Models {
 		return this.enqueueCredentialOperation(providerId, signal, async () => {
 			await this.models.logout(providerId, { signal });
 			await this.synchronizeCredentialState(providerId, "logout", undefined, signal);
+		});
+	}
+
+	rotateAccount(
+		providerId: string,
+		failedAccountId?: string,
+		cooldownMs?: number,
+		options?: AuthOperationOptions,
+	): Promise<{ rotated: boolean; activeAccount?: AccountEntry }> {
+		return this.models.rotateAccount(providerId, failedAccountId, cooldownMs, options);
+	}
+
+	async listAccounts(providerId: string, options?: AuthOperationOptions): Promise<readonly AccountEntry[]> {
+		const store = this.credentials.backingStore;
+		if ("getAccounts" in store && typeof (store as { getAccounts: unknown }).getAccounts === "function") {
+			return (
+				store as unknown as { getAccounts(p: string, o?: AuthOperationOptions): Promise<readonly AccountEntry[]> }
+			).getAccounts(providerId, options);
+		}
+		const credential = await store.read(providerId, options);
+		if (!credential) return [];
+		if (credential.type === "pool") return credential.accounts;
+		return [{ id: "default", label: credential.type === "oauth" ? "OAuth Account" : "Default API Key", credential }];
+	}
+
+	async switchAccount(providerId: string, accountId: string, options?: AuthOperationOptions): Promise<boolean> {
+		const signal = operationSignal(options?.signal);
+		return this.enqueueCredentialOperation(providerId, signal, async () => {
+			const store = this.credentials.backingStore;
+			if (
+				"setActiveAccount" in store &&
+				typeof (store as { setActiveAccount: unknown }).setActiveAccount === "function"
+			) {
+				const success = await (
+					store as unknown as {
+						setActiveAccount(p: string, a: string, o?: AuthOperationOptions): Promise<boolean>;
+					}
+				).setActiveAccount(providerId, accountId, options);
+				if (success) {
+					await this.synchronizeCredentialState(
+						providerId,
+						"login",
+						await store.read(providerId, options),
+						signal,
+					);
+				}
+				return success;
+			}
+			return false;
+		});
+	}
+
+	async removeAccount(providerId: string, accountId: string, options?: AuthOperationOptions): Promise<void> {
+		const signal = operationSignal(options?.signal);
+		return this.enqueueCredentialOperation(providerId, signal, async () => {
+			const store = this.credentials.backingStore;
+			if ("removeAccount" in store && typeof (store as { removeAccount: unknown }).removeAccount === "function") {
+				await (
+					store as unknown as { removeAccount(p: string, a: string, o?: AuthOperationOptions): Promise<void> }
+				).removeAccount(providerId, accountId, options);
+			} else {
+				await store.delete(providerId, options);
+			}
+			const remaining = await store.read(providerId, options);
+			await this.synchronizeCredentialState(providerId, remaining ? "login" : "logout", remaining, signal);
+		});
+	}
+
+	async addAccount(
+		providerId: string,
+		type: AuthType,
+		interaction: AuthInteraction,
+		label?: string,
+		options?: LoginOptions,
+	): Promise<AccountPoolCredential> {
+		const signal = operationSignal(interaction.signal);
+		return this.enqueueCredentialOperation(providerId, signal, async () => {
+			const newCred = await this.models.login(providerId, type, { ...interaction, signal }, options);
+			const store = this.credentials.backingStore;
+			let pool: AccountPoolCredential;
+			if ("addAccount" in store && typeof (store as { addAccount: unknown }).addAccount === "function") {
+				pool = await (
+					store as unknown as {
+						addAccount(
+							p: string,
+							e: { label?: string; credential: unknown },
+							active: boolean,
+							o?: AuthOperationOptions,
+						): Promise<AccountPoolCredential>;
+					}
+				).addAccount(providerId, { label, credential: newCred }, true, { signal });
+			} else {
+				pool = {
+					type: "pool",
+					activeId: "account-1",
+					accounts: [{ id: "account-1", label: label || "Account 1", credential: newCred as any }],
+				};
+				await store.modify(providerId, async () => pool, { signal });
+			}
+			await this.synchronizeCredentialState(providerId, "login", pool, signal);
+			return pool;
 		});
 	}
 

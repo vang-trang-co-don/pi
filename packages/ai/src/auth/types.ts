@@ -33,13 +33,38 @@ export interface OAuthCredential extends OAuthCredentials {
 	type: "oauth";
 }
 
-/** One type-tagged credential per provider — the shape of today's auth.json. */
-export type Credential = ApiKeyCredential | OAuthCredential;
+/** A single account entry inside an AccountPoolCredential. */
+export interface AccountEntry {
+	id: string;
+	label?: string;
+	credential: ApiKeyCredential | OAuthCredential;
+	cooldownUntil?: number;
+	lastUsed?: number;
+	errorCount?: number;
+	disabled?: boolean;
+}
+
+/** Stored pool of multiple credentials/accounts for a single provider. */
+export interface AccountPoolCredential {
+	type: "pool";
+	activeId: string;
+	strategy?: "failover" | "round-robin";
+	accounts: AccountEntry[];
+}
+
+/** One type-tagged credential per provider — single credential or multi-account pool. */
+export type Credential = ApiKeyCredential | OAuthCredential | AccountPoolCredential;
+
+export function isAccountPoolCredential(credential: Credential | undefined): credential is AccountPoolCredential {
+	return credential?.type === "pool";
+}
 
 /** Non-secret credential metadata for account/status enumeration. */
 export interface CredentialInfo {
 	providerId: string;
 	type: Credential["type"];
+	activeLabel?: string;
+	accountCount?: number;
 }
 
 /** Optional cancellation for public auth and credential operations. */
@@ -107,6 +132,8 @@ export interface AuthResult {
 	env?: ProviderEnv;
 	/** Human-readable label for status UI: "ANTHROPIC_API_KEY", "OAuth", "~/.aws/credentials". */
 	source?: string;
+	/** Account ID if resolved from an account pool. */
+	accountId?: string;
 }
 
 export interface AuthCheck {

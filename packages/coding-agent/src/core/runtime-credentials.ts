@@ -9,6 +9,10 @@ export class RuntimeCredentials implements CredentialStore {
 		this.store = store;
 	}
 
+	get backingStore(): CredentialStore {
+		return this.store;
+	}
+
 	setRuntimeApiKey(providerId: string, apiKey: string): void {
 		this.overrides.set(providerId, apiKey);
 	}

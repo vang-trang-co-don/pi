@@ -159,6 +159,59 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
 		if (parsed.diagnostics.length > 0) {
 			throw new AuthCommandError(parsed.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
 		}
+		if (command.kind === "accounts") {
+			const storage = AuthStorage.create();
+			const providerFilter = parsed.provider?.trim();
+			const list = await storage.list();
+			const providers = providerFilter ? [providerFilter] : list.map((l) => l.providerId);
+			const accountsMap: Record<string, { activeId?: string; accounts: any[] }> = {};
+			for (const p of providers) {
+				const accounts = await storage.getAccounts(p);
+				const activeId = await storage.getActiveAccountId(p);
+				accountsMap[p] = { activeId, accounts: accounts.map((a) => ({ ...a, isActive: a.id === activeId })) };
+			}
+			if (command.json) {
+				process.stdout.write(`${JSON.stringify(accountsMap, null, 2)}\n`);
+			} else {
+				if (Object.keys(accountsMap).length === 0) {
+					console.log(chalk.dim("No accounts configured. Use 'pi /login <provider>' to add an account."));
+				}
+				for (const [p, { activeId, accounts }] of Object.entries(accountsMap)) {
+					console.log(chalk.bold.cyan(`Provider: ${p}`));
+					if (accounts.length === 0) {
+						console.log(chalk.dim("  (No accounts configured)"));
+						continue;
+					}
+					for (const a of accounts) {
+						const isActive = a.id === activeId;
+						const isCooldown = a.cooldownUntil && a.cooldownUntil > Date.now();
+						const cooldownText = isCooldown
+							? chalk.yellow(` [COOLDOWN ${Math.ceil((a.cooldownUntil - Date.now()) / 60000)}m left]`)
+							: "";
+						const statusMark = isActive ? chalk.green("* [ACTIVE] ") : chalk.dim("  [STANDBY] ");
+						const typeText = chalk.dim(`(${a.credential.type}, id: ${a.id})`);
+						console.log(`${statusMark}${chalk.bold(a.label ?? a.id)} ${typeText}${cooldownText}`);
+					}
+				}
+			}
+			return true;
+		}
+
+		if (command.kind === "switch") {
+			const provider = parsed.provider?.trim();
+			const accountId = parsed.account?.trim();
+			if (!provider || !accountId) {
+				throw new AuthCommandError("Usage: pi auth switch --provider <provider> --account <accountId>");
+			}
+			const storage = AuthStorage.create();
+			const success = await storage.setActiveAccount(provider, accountId);
+			if (!success) {
+				throw new AuthCommandError(`Account "${accountId}" not found for provider "${provider}".`);
+			}
+			console.log(chalk.green(`Switched active account for "${provider}" to "${accountId}".`));
+			return true;
+		}
+
 		if (command.kind !== "check") {
 			const signal = AbortSignal.timeout(15_000);
 			const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal });

@@ -15,7 +15,7 @@ import { DynamicBorder } from "./dynamic-border.ts";
 export type AuthSelectorProvider = {
 	id: string;
 	name: string;
-	authType: "oauth" | "api_key";
+	authType: "oauth" | "api_key" | "pool";
 	method?: ApiKeyAuth | OAuthAuth;
 	status?: AuthCheck;
 	/**
@@ -29,6 +29,7 @@ export function formatAuthSelectorProviderType(
 	authType: AuthSelectorProvider["authType"],
 	subscription?: boolean,
 ): string {
+	if (authType === "pool") return "account pool";
 	if (authType === "api_key") return "API key";
 	return subscription === false ? "account" : "subscription";
 }
