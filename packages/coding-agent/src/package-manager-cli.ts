@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -8,7 +9,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import lockfile from "proper-lockfile";
@@ -771,6 +772,119 @@ async function runConfiguredSelfUpdate(argv: string[], plan: SelfUpdatePlan): Pr
 	);
 }
 
+function findGitRootForSelfUpdate(): string | undefined {
+	try {
+		const entrypoint = process.argv[1];
+		const searchDir = entrypoint ? dirname(resolve(entrypoint)) : process.cwd();
+		const root = execSync("git rev-parse --show-toplevel", {
+			cwd: searchDir,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		return root || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function runGitSelfUpdate(gitRoot: string, force: boolean): Promise<boolean> {
+	console.log(chalk.dim(`Checking for upstream updates in git repository (${gitRoot})...`));
+
+	let remote = "upstream";
+	try {
+		const remotes = execSync("git remote", { cwd: gitRoot, encoding: "utf-8" }).split(/\s+/).filter(Boolean);
+		if (!remotes.includes("upstream")) {
+			if (remotes.includes("origin")) {
+				remote = "origin";
+			} else {
+				console.error(chalk.red("Error: No git remote 'upstream' or 'origin' configured."));
+				process.exitCode = 1;
+				return true;
+			}
+		}
+	} catch {
+		console.error(chalk.red("Error: Failed to inspect git remotes."));
+		process.exitCode = 1;
+		return true;
+	}
+
+	try {
+		const status = execSync("git status --porcelain", { cwd: gitRoot, encoding: "utf-8" }).trim();
+		if (status) {
+			console.error(chalk.yellow("Warning: Working tree has uncommitted changes."));
+			console.error(chalk.dim("Please commit or stash your changes before running self-update."));
+			process.exitCode = 1;
+			return true;
+		}
+	} catch {}
+
+	try {
+		console.log(chalk.dim(`Fetching latest changes from ${remote}/main...`));
+		execSync(`git fetch ${remote} main`, { cwd: gitRoot, stdio: "inherit" });
+	} catch (error: unknown) {
+		console.error(
+			chalk.red(`Failed to fetch from ${remote}/main: ${error instanceof Error ? error.message : String(error)}`),
+		);
+		process.exitCode = 1;
+		return true;
+	}
+
+	let newCommitCount = 0;
+	try {
+		const countStr = execSync(`git rev-list --count HEAD..${remote}/main`, {
+			cwd: gitRoot,
+			encoding: "utf-8",
+		}).trim();
+		newCommitCount = parseInt(countStr, 10) || 0;
+	} catch {
+		newCommitCount = 0;
+	}
+
+	if (newCommitCount === 0 && !force) {
+		let currentSha = "";
+		try {
+			currentSha = execSync("git rev-parse --short HEAD", { cwd: gitRoot, encoding: "utf-8" }).trim();
+		} catch {}
+		console.log(chalk.green(`${APP_NAME} is already up to date with ${remote}/main (${currentSha})`));
+		return true;
+	}
+
+	console.log(chalk.cyan(`Rebasing onto ${remote}/main (${newCommitCount} new upstream commit(s))...`));
+	try {
+		execSync(`git rebase ${remote}/main`, { cwd: gitRoot, stdio: "inherit" });
+	} catch (_error: unknown) {
+		console.error(chalk.red("Rebase encountered a conflict."));
+		try {
+			execSync("git rebase --abort", { cwd: gitRoot, stdio: "ignore" });
+			console.error(chalk.dim("Rebase aborted. Your branch remains unchanged. Resolve conflicts manually."));
+		} catch {}
+		process.exitCode = 1;
+		return true;
+	}
+
+	console.log(chalk.dim("Rebuilding bundles..."));
+	try {
+		execSync(
+			"npx tsc -p packages/ai/tsconfig.build.json && npx tsc -p packages/coding-agent/tsconfig.build.json && node scripts/build-coding-agent-bundle.mjs",
+			{
+				cwd: gitRoot,
+				stdio: "inherit",
+			},
+		);
+	} catch {
+		console.error(chalk.red("Build failed after rebase."));
+		process.exitCode = 1;
+		return true;
+	}
+
+	let newSha = "";
+	try {
+		newSha = execSync("git rev-parse --short HEAD", { cwd: gitRoot, encoding: "utf-8" }).trim();
+	} catch {}
+	console.log(chalk.green(`Successfully updated ${APP_NAME} to ${remote}/main (${newSha})!`));
+	return true;
+}
+
 /** Version printed by `pi --version` as resolved from PATH, the pi the user runs next. */
 function readVersionOnPath(): string | undefined {
 	// PI_PACKAGE_DIR points at this installation and would make the new pi report the old version.
@@ -1120,6 +1234,15 @@ export async function handlePackageCommand(
 						process.exitCode = 1;
 						return true;
 					}
+
+					// If running from a git checkout without a managed or configured command, self-update via git
+					const gitRoot =
+						!configuredSelfUpdateArgv && !managedInstallRoot ? findGitRootForSelfUpdate() : undefined;
+					if (gitRoot) {
+						await runGitSelfUpdate(gitRoot, options.force);
+						return true;
+					}
+
 					const selfUpdatePlan = await getSelfUpdatePlan(options.force);
 					if (!selfUpdatePlan.shouldRun) {
 						return true;
