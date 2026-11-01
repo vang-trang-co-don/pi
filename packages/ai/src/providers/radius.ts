@@ -73,7 +73,14 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"p
 			}
 
 			if (!context.allowNetwork || context.signal.aborted) return;
-			const apiKey = context.credential?.type === "oauth" ? context.credential.access : context.credential?.key;
+			let apiKey: string | undefined;
+			const cred = context.credential;
+			if (cred?.type === "oauth") apiKey = cred.access;
+			else if (cred?.type === "api_key") apiKey = cred.key;
+			else if (cred?.type === "pool") {
+				const active = cred.accounts.find((a) => a.id === cred.activeId);
+				apiKey = active?.credential.type === "oauth" ? active.credential.access : active?.credential.key;
+			}
 			const config = await loadRadiusGatewayConfig(gateway, apiKey, context.signal);
 			if (context.signal.aborted) return;
 			const refreshed = getRadiusModelsFromConfig(id, config);

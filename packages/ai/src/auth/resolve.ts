@@ -5,6 +5,8 @@ import { ModelsError } from "../utils/models-error.ts";
 export { ModelsError, type ModelsErrorCode } from "../utils/models-error.ts";
 
 import type {
+	AccountEntry,
+	AccountPoolCredential,
 	ApiKeyAuth,
 	ApiKeyCredential,
 	AuthContext,
@@ -22,6 +24,93 @@ export interface AuthResolutionOverrides {
 	/** Require this much remaining OAuth-token validity; defaults to five minutes. */
 	minOAuthValidityMs?: number;
 	signal?: AbortSignal;
+}
+
+/**
+ * Select the active non-cooldown account from a pool.
+ * If all accounts are on cooldown and allowCooldown is true, returns the account
+ * whose cooldown expires earliest.
+ */
+export function selectActiveAccount(pool: AccountPoolCredential, allowCooldown = false): AccountEntry | undefined {
+	const now = Date.now();
+	// 1. Check if designated activeId is valid and not on cooldown
+	const active = pool.accounts.find((a) => a.id === pool.activeId && !a.disabled);
+	if (active && (!active.cooldownUntil || active.cooldownUntil <= now)) {
+		return active;
+	}
+	// 2. Fallback to first available account not on cooldown
+	const standby = pool.accounts.find((a) => !a.disabled && (!a.cooldownUntil || a.cooldownUntil <= now));
+	if (standby) return standby;
+
+	// 3. If all are on cooldown and allowCooldown is true, pick the one unlocking earliest
+	if (allowCooldown && pool.accounts.length > 0) {
+		const nonDisabled = pool.accounts.filter((a) => !a.disabled);
+		if (nonDisabled.length > 0) {
+			return [...nonDisabled].sort((a, b) => (a.cooldownUntil ?? 0) - (b.cooldownUntil ?? 0))[0];
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Rotate an account in a provider's AccountPoolCredential after failure (429 rate limit or 401 auth failure).
+ * Sets cooldown on the failed account and switches activeId to the next available standby account.
+ */
+export async function rotateAccountInStore(
+	credentials: CredentialStore,
+	providerId: string,
+	failedAccountId?: string,
+	cooldownMs: number = 5 * 60 * 1000,
+	signal?: AbortSignal,
+): Promise<{ rotated: boolean; activeAccount?: AccountEntry }> {
+	let rotated = false;
+	let activeAccount: AccountEntry | undefined;
+
+	await credentials.modify(
+		providerId,
+		async (current) => {
+			if (!current || current.type !== "pool") {
+				return undefined;
+			}
+			const now = Date.now();
+			const targetId = failedAccountId ?? current.activeId;
+			const targetIdx = current.accounts.findIndex((a) => a.id === targetId);
+
+			const updatedAccounts = [...current.accounts];
+			if (targetIdx !== -1) {
+				const failed = updatedAccounts[targetIdx];
+				updatedAccounts[targetIdx] = {
+					...failed,
+					cooldownUntil: now + cooldownMs,
+					errorCount: (failed.errorCount ?? 0) + 1,
+				};
+			}
+
+			// Find next eligible standby account not on cooldown
+			const nextAccount = updatedAccounts.find(
+				(a) => a.id !== targetId && !a.disabled && (!a.cooldownUntil || a.cooldownUntil <= now),
+			);
+
+			if (nextAccount) {
+				rotated = true;
+				activeAccount = nextAccount;
+				return {
+					...current,
+					activeId: nextAccount.id,
+					accounts: updatedAccounts,
+				};
+			}
+
+			// All accounts are on cooldown. Still record cooldown on the failed account.
+			return {
+				...current,
+				accounts: updatedAccounts,
+			};
+		},
+		{ signal },
+	);
+
+	return { rotated, activeAccount };
 }
 
 /**
@@ -69,6 +158,43 @@ async function resolveProviderAuthWithSignal(
 
 	const stored = await readCredential(credentials, provider.id, signal);
 	if (stored) {
+		if (stored.type === "pool") {
+			const activeAccount = selectActiveAccount(stored, true);
+			if (!activeAccount) return undefined;
+			const accountCred = activeAccount.credential;
+			if (accountCred.type === "oauth" && provider.auth.oauth) {
+				return resolveStoredOAuth(
+					credentials,
+					provider.id,
+					provider.auth.oauth,
+					accountCred,
+					signal,
+					overrides?.minOAuthValidityMs,
+					activeAccount.id,
+					activeAccount.label,
+				);
+			}
+			if (accountCred.type === "api_key" && provider.auth.apiKey) {
+				const credential = overrides?.env
+					? { ...accountCred, env: { ...accountCred.env, ...overrides.env } }
+					: accountCred;
+				const result = await resolveApiKey(
+					requestAuthContext,
+					provider.auth.apiKey,
+					provider.id,
+					credential,
+					signal,
+				);
+				if (result) {
+					const sourceLabel = activeAccount.label
+						? `${result.source ?? "API Key"} (${activeAccount.label})`
+						: result.source;
+					return { ...result, source: sourceLabel, accountId: activeAccount.id };
+				}
+				return undefined;
+			}
+			return undefined;
+		}
 		if (stored.type === "oauth" && provider.auth.oauth) {
 			return resolveStoredOAuth(
 				credentials,
@@ -122,8 +248,10 @@ export async function refreshStoredOAuthCredential(
 	oauth: OAuthAuth,
 	needsRefresh: (credential: OAuthCredential) => boolean,
 	signal: AbortSignal,
+	targetAccountId?: string,
 ): Promise<OAuthCredential | undefined> {
 	let post: Credential | undefined;
+	let refreshedToken: OAuthCredential | undefined;
 	const lockWait = new AbortController();
 	const cancelLockWait = () => lockWait.abort(signal.reason);
 	signal.addEventListener("abort", cancelLockWait, { once: true });
@@ -134,10 +262,48 @@ export async function refreshStoredOAuthCredential(
 			async (current) => {
 				signal.removeEventListener("abort", cancelLockWait);
 				signal.throwIfAborted();
-				if (current?.type !== "oauth") return undefined; // logged out meanwhile
-				if (!needsRefresh(current)) return undefined; // another process/request refreshed
+				if (!current) return undefined;
+				if (current.type === "pool") {
+					const targetId = targetAccountId ?? current.activeId;
+					const idx = current.accounts.findIndex((a) => a.id === targetId);
+					if (idx === -1) return undefined;
+					const account = current.accounts[idx];
+					if (account.credential.type !== "oauth") return undefined;
+					if (!needsRefresh(account.credential)) {
+						refreshedToken = account.credential;
+						return undefined;
+					}
+					try {
+						const refreshed = await oauth.refresh(
+							account.credential,
+							AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS),
+						);
+						refreshedToken = refreshed;
+						const nextAccounts = [...current.accounts];
+						nextAccounts[idx] = {
+							...account,
+							credential: refreshed,
+							cooldownUntil: undefined,
+						};
+						return {
+							...current,
+							accounts: nextAccounts,
+						};
+					} catch (error) {
+						throw new ModelsError("oauth", `OAuth refresh failed for ${providerId} (account ${targetId})`, {
+							cause: error,
+						});
+					}
+				}
+				if (current.type !== "oauth") return undefined; // logged out meanwhile
+				if (!needsRefresh(current)) {
+					refreshedToken = current;
+					return undefined; // another process/request refreshed
+				}
 				try {
-					return await oauth.refresh(current, AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS));
+					const refreshed = await oauth.refresh(current, AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS));
+					refreshedToken = refreshed;
+					return refreshed;
 				} catch (error) {
 					throw new ModelsError("oauth", `OAuth refresh failed for ${providerId}`, { cause: error });
 				}
@@ -151,7 +317,14 @@ export async function refreshStoredOAuthCredential(
 	} finally {
 		signal.removeEventListener("abort", cancelLockWait);
 	}
-	return post?.type === "oauth" ? post : undefined;
+	if (refreshedToken) return refreshedToken;
+	if (post?.type === "oauth") return post;
+	if (post?.type === "pool") {
+		const targetId = targetAccountId ?? post.activeId;
+		const acc = post.accounts.find((a) => a.id === targetId);
+		return acc?.credential.type === "oauth" ? acc.credential : undefined;
+	}
+	return undefined;
 }
 
 /**
@@ -165,6 +338,8 @@ async function resolveStoredOAuth(
 	stored: OAuthCredential,
 	signal: AbortSignal,
 	minOAuthValidityMs?: number,
+	accountId?: string,
+	accountLabel?: string,
 ): Promise<AuthResult | undefined> {
 	const minimumValidityMs = Math.max(DEFAULT_OAUTH_MINIMUM_VALIDITY_MS, minOAuthValidityMs ?? 0);
 	const expiresSoon = (credential: OAuthCredential) => Date.now() + minimumValidityMs >= credential.expires;
@@ -172,9 +347,24 @@ async function resolveStoredOAuth(
 
 	if (expiresSoon(credential)) {
 		// Optimistic check said expired; the authoritative check runs under the lock.
-		const post = await refreshStoredOAuthCredential(credentials, providerId, oauth, expiresSoon, signal);
-		if (!post) return undefined; // logged out meanwhile
-		credential = post;
+		const post = await refreshStoredOAuthCredential(credentials, providerId, oauth, expiresSoon, signal, accountId);
+		if (!post) {
+			const current = await readCredential(credentials, providerId, signal);
+			if (current?.type === "pool") {
+				const acc = current.accounts.find((a) => a.id === (accountId ?? current.activeId));
+				if (acc && acc.credential.type === "oauth" && !expiresSoon(acc.credential)) {
+					credential = acc.credential;
+				} else {
+					return undefined;
+				}
+			} else if (current?.type === "oauth" && !expiresSoon(current)) {
+				credential = current;
+			} else {
+				return undefined;
+			}
+		} else {
+			credential = post;
+		}
 		// The normal five-minute window triggers a refresh but does not impose a
 		// provider contract. Explicit callers (such as bearer-token export) do
 		// require the requested minimum after the refresh.
@@ -184,7 +374,8 @@ async function resolveStoredOAuth(
 	}
 
 	try {
-		return { auth: await oauth.toAuth(credential), source: "OAuth" };
+		const source = accountLabel ? `OAuth (${accountLabel})` : "OAuth";
+		return { auth: await oauth.toAuth(credential), source, accountId };
 	} catch (error) {
 		throw new ModelsError("oauth", `OAuth auth derivation failed for ${providerId}`, { cause: error });
 	}

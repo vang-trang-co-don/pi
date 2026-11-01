@@ -6,8 +6,11 @@ import {
 	ModelsError,
 	refreshStoredOAuthCredential,
 	resolveProviderAuth,
+	rotateAccountInStore,
+	selectActiveAccount,
 } from "./auth/resolve.ts";
 import type {
+	AccountEntry,
 	AuthCheck,
 	AuthContext,
 	AuthInteraction,
@@ -67,9 +70,10 @@ import {
 	imageErrorResult,
 	isModelType,
 } from "./utils/model-operations.ts";
+import { streamWithPoolFailover } from "./utils/pool-failover.ts";
 import { normalizeContext } from "./utils/transcript.ts";
 
-export { ModelsError, type ModelsErrorCode } from "./auth/resolve.ts";
+export { ModelsError, type ModelsErrorCode, rotateAccountInStore, selectActiveAccount } from "./auth/resolve.ts";
 export { AI_TELEMETRY_SCHEMA } from "./telemetry.ts";
 export { getModelType, isModelType } from "./utils/model-operations.ts";
 
@@ -320,6 +324,14 @@ export interface Models {
 
 	/** Remove the stored credential for a provider. */
 	logout(providerId: string, options?: AuthOperationOptions): Promise<void>;
+
+	/** Rotate an account in a provider's AccountPoolCredential after failure (429/401). */
+	rotateAccount(
+		providerId: string,
+		failedAccountId?: string,
+		cooldownMs?: number,
+		options?: AuthOperationOptions,
+	): Promise<{ rotated: boolean; activeAccount?: AccountEntry }>;
 
 	stream<TApi extends Api>(
 		model: Model<TApi>,
@@ -666,6 +678,14 @@ class ModelsImpl implements MutableModels {
 		credential: Credential | undefined,
 		signal: AbortSignal,
 	): Promise<AuthCheck | undefined> {
+		if (credential?.type === "pool") {
+			const active = selectActiveAccount(credential, true);
+			if (!active) return undefined;
+			if (active.credential.type === "oauth") {
+				return provider.auth.oauth ? { source: `OAuth (${active.label ?? active.id})`, type: "oauth" } : undefined;
+			}
+			credential = active.credential;
+		}
 		if (credential?.type === "oauth") {
 			return provider.auth.oauth ? { source: "OAuth", type: "oauth" } : undefined;
 		}
@@ -898,6 +918,16 @@ class ModelsImpl implements MutableModels {
 		return { requestModel, requestOptions };
 	}
 
+	async rotateAccount(
+		providerId: string,
+		failedAccountId?: string,
+		cooldownMs: number = 5 * 60 * 1000,
+		options?: AuthOperationOptions,
+	): Promise<{ rotated: boolean; activeAccount?: AccountEntry }> {
+		const signal = operationSignal(options?.signal);
+		return rotateAccountInStore(this.credentials, providerId, failedAccountId, cooldownMs, signal);
+	}
+
 	stream<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
@@ -906,14 +936,20 @@ class ModelsImpl implements MutableModels {
 		const transcript = normalizeContext(context);
 		return lazyStream(
 			model,
-			async () => {
-				const provider = this.requireChatProvider(model);
-				const { requestModel, requestOptions } = await this.applyAuth(
-					model,
-					options as ModelsApiStreamOptions<Api> | undefined,
-				);
-				return provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>);
-			},
+			async () =>
+				streamWithPoolFailover(
+					model.provider,
+					this,
+					async () => {
+						const provider = this.requireChatProvider(model);
+						const { requestModel, requestOptions } = await this.applyAuth(
+							model,
+							options as ModelsApiStreamOptions<Api> | undefined,
+						);
+						return provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>);
+					},
+					options?.signal,
+				),
 			observeModelRequest(model, options, false),
 		);
 	}
@@ -930,11 +966,17 @@ class ModelsImpl implements MutableModels {
 		const transcript = normalizeContext(context);
 		return lazyStream(
 			model,
-			async () => {
-				const provider = this.requireChatProvider(model);
-				const { requestModel, requestOptions } = await this.applyAuth(model, options);
-				return provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions);
-			},
+			async () =>
+				streamWithPoolFailover(
+					model.provider,
+					this,
+					async () => {
+						const provider = this.requireChatProvider(model);
+						const { requestModel, requestOptions } = await this.applyAuth(model, options);
+						return provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions);
+					},
+					options?.signal,
+				),
 			observeModelRequest(model, options, false),
 		);
 	}

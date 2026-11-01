@@ -172,6 +172,8 @@ export function withClientIdentity(models: Models, identity: ClientIdentity): Mo
 		getAuth: models.getAuth.bind(models),
 		login: (providerId, type, interaction, options) => models.login(providerId, type, interaction, options),
 		logout: (providerId, options) => models.logout(providerId, options),
+		rotateAccount: (providerId, failedAccountId, cooldownMs, options) =>
+			models.rotateAccount(providerId, failedAccountId, cooldownMs, options),
 		stream: (model, context, options) => models.stream(model, context, withIdentity(options)),
 		complete: (model, context, options) => models.complete(model, context, withIdentity(options)),
 		streamSimple: (model, context, options) => models.streamSimple(model, context, withIdentity(options)),

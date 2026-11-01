@@ -2,6 +2,7 @@ import type { TelemetrySpan } from "@earendil-works/pi-telemetry";
 import type { AnthropicOptions } from "./api/anthropic-messages.ts";
 import type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 import type { BedrockOptions } from "./api/bedrock-converse-stream.ts";
+import type { GoogleCloudCodePaOptions } from "./api/google-cloud-code-pa.ts";
 import type { GoogleOptions } from "./api/google-generative-ai.ts";
 import type { GoogleVertexOptions } from "./api/google-vertex.ts";
 import type { MistralOptions } from "./api/mistral-conversations.ts";
@@ -71,6 +72,7 @@ export type KnownApi =
 	| "bedrock-converse-stream"
 	| "google-generative-ai"
 	| "google-vertex"
+	| "google-cloud-code-pa"
 	| "pi-messages";
 
 export type Api = KnownApi | (string & {});
@@ -91,6 +93,7 @@ export type KnownProvider =
 	| "amazon-bedrock"
 	| "ant-ling"
 	| "anthropic"
+	| "antigravity"
 	| "google"
 	| "google-vertex"
 	| "openai"
@@ -295,6 +298,7 @@ export interface ApiOptionsMap {
 	"azure-openai-responses": AzureOpenAIResponsesOptions;
 	"google-generative-ai": GoogleOptions;
 	"google-vertex": GoogleVertexOptions;
+	"google-cloud-code-pa": GoogleCloudCodePaOptions;
 	"mistral-conversations": MistralOptions;
 	"bedrock-converse-stream": BedrockOptions;
 	"pi-messages": PiMessagesOptions;

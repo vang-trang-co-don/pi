@@ -2,7 +2,7 @@ import type { AuthResult } from "@earendil-works/pi-ai";
 import { APP_NAME } from "../config.ts";
 import type { Args } from "./args.ts";
 
-export type AuthCommandKind = "check" | "api_key" | "bearer_token";
+export type AuthCommandKind = "check" | "api_key" | "bearer_token" | "accounts" | "switch";
 
 export interface AuthCommand {
 	kind: AuthCommandKind;
@@ -19,10 +19,20 @@ const AUTH_COMMAND_USAGE: Record<AuthCommandKind, string> = {
 	check: `${APP_NAME} auth check --provider <provider> [--json] [--credentials] [--no-refresh]`,
 	api_key: `${APP_NAME} auth print-api-key --provider <provider> [--model <model>]`,
 	bearer_token: `${APP_NAME} auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]`,
+	accounts: `${APP_NAME} auth accounts [--provider <provider>] [--json]`,
+	switch: `${APP_NAME} auth switch --provider <provider> --account <accountId>`,
 };
 
 export function getAuthCommandName(kind: AuthCommandKind): string {
-	return kind === "check" ? "auth check" : kind === "api_key" ? "auth print-api-key" : "auth print-bearer-token";
+	return kind === "check"
+		? "auth check"
+		: kind === "api_key"
+			? "auth print-api-key"
+			: kind === "bearer_token"
+				? "auth print-bearer-token"
+				: kind === "accounts"
+					? "auth accounts"
+					: "auth switch";
 }
 
 export function getAuthCommandUsage(kind: AuthCommandKind): string {
@@ -38,11 +48,13 @@ export function isAuthCommandHelp(args: string[]): boolean {
 
 export function printAuthCommandHelp(): void {
 	console.log(`Usage:
+  pi auth accounts [--provider <provider>] [--json]
+  pi auth switch --provider <provider> --account <accountId>
   pi auth print-api-key [--provider <provider>] [--model <model>]
   pi auth print-bearer-token [--provider <provider>] [--model <model>] [--min-expiry <duration>]
   pi auth check [--provider <provider>] [--model <model>] [--json] [--credentials] [--no-refresh]
 
-Auth commands require at least one of --provider or --model. Checks refresh expired OAuth credentials by default; --no-refresh prevents this. --credentials emits the credential, or includes it in JSON output.`);
+Auth commands manage provider accounts, check readiness, or print credentials.`);
 }
 
 export function parseAuthCommand(args: string[]): AuthCommand | undefined {
@@ -55,10 +67,14 @@ export function parseAuthCommand(args: string[]): AuthCommand | undefined {
 				? "api_key"
 				: args[1] === "print-bearer-token"
 					? "bearer_token"
-					: undefined;
+					: args[1] === "accounts"
+						? "accounts"
+						: args[1] === "switch"
+							? "switch"
+							: undefined;
 	if (!kind) {
 		throw new AuthCommandError(
-			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth print-api-key", "${APP_NAME} auth print-bearer-token", or "${APP_NAME} auth check".`,
+			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth accounts", "${APP_NAME} auth switch", "${APP_NAME} auth print-api-key", or "${APP_NAME} auth check".`,
 		);
 	}
 
@@ -81,10 +97,15 @@ export function parseAuthCommand(args: string[]): AuthCommand | undefined {
 			continue;
 		}
 		if (arg === "--json" || arg === "--credentials" || arg === "--no-refresh") {
-			if (kind !== "check") throw new AuthCommandError(`${arg} is only supported by auth check`);
-			if (arg === "--json") json = true;
-			else if (arg === "--credentials") credentials = true;
-			else noRefresh = true;
+			if (arg === "--json") {
+				json = true;
+			} else if (arg === "--credentials") {
+				if (kind !== "check") throw new AuthCommandError(`${arg} is only supported by auth check`);
+				credentials = true;
+			} else {
+				if (kind !== "check") throw new AuthCommandError(`${arg} is only supported by auth check`);
+				noRefresh = true;
+			}
 			continue;
 		}
 		commandArgs.push(arg);

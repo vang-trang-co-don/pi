@@ -373,7 +373,7 @@ type LoginProviderCompletionOption = {
 
 const RADIUS_LOGIN_INTRO = "Radius is a service crafted for Pi by the builders of Pi, Earendil Works";
 
-const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
+const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1, pool: 2 } satisfies Record<AuthSelectorProvider["authType"], number>;
 
 function createFuzzyAutocompleteItems<T>(
 	items: T[],
@@ -3351,6 +3351,12 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/accounts" || text.startsWith("/accounts ")) {
+				const providerRef = text.startsWith("/accounts ") ? text.slice(10).trim() : undefined;
+				this.editor.setText("");
+				await this.showAccountsSelector(providerRef);
+				return;
+			}
 			if (text === "/login" || text.startsWith("/login ")) {
 				const providerRef = text.startsWith("/login ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
@@ -5930,11 +5936,161 @@ export class InteractiveMode {
 					id: providerId,
 					name: provider?.name ?? providerId,
 					authType: type,
-					status: { type, source: "stored credential" },
+					status: { type: type === "pool" ? "oauth" : type, source: "stored credential" },
 					subscription: provider?.auth.oauth?.isSubscription === true,
 				};
 			})
 			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	private async showAccountsSelector(providerRef?: string): Promise<void> {
+		const credentials = await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) });
+		if (credentials.length === 0) {
+			this.showStatus("No provider credentials configured. Run /login to add an account.");
+			return;
+		}
+
+		let targetProviderId: string | undefined;
+		if (providerRef) {
+			const matching = this.findLoginProviderOptions(providerRef);
+			if (matching.length > 0) {
+				targetProviderId = matching[0].id;
+			} else {
+				targetProviderId = providerRef.trim().toLowerCase();
+			}
+		} else if (credentials.length === 1) {
+			targetProviderId = credentials[0].providerId;
+		}
+
+		if (!targetProviderId) {
+			// Show provider selector first
+			const providerOptions = credentials.map((c) => {
+				const p = this.session.modelRuntime.getProvider(c.providerId);
+				const count = c.accountCount ?? 1;
+				const label = c.activeLabel ? ` (${c.activeLabel})` : "";
+				return {
+					id: c.providerId,
+					label: `${p?.name ?? c.providerId}${label} - ${count} account${count > 1 ? "s" : ""}`,
+				};
+			});
+			this.showSelector((done) => {
+				const title = "Select a provider to manage accounts:";
+				const onSelect = (option: string) => {
+					done();
+					const selected = providerOptions.find((p) => p.label === option);
+					if (selected) {
+						void this.showAccountsSelector(selected.id);
+					}
+				};
+				const onCancel = () => {
+					done();
+					this.ui.requestRender();
+				};
+				const selector = new ExtensionSelectorComponent(
+					title,
+					providerOptions.map((p) => p.label),
+					onSelect,
+					onCancel,
+				);
+				return { component: selector, focus: selector, dispose: () => selector.dispose() };
+			});
+			return;
+		}
+
+		const providerId = targetProviderId;
+		const provider = this.session.modelRuntime.getProvider(providerId);
+		const providerName = provider?.name ?? providerId;
+		const accounts = await this.session.modelRuntime.listAccounts(providerId);
+
+		this.showSelector((done) => {
+			const activeAccount =
+				accounts.find((a) => !a.disabled && (!a.cooldownUntil || a.cooldownUntil <= Date.now())) ?? accounts[0];
+			const options: string[] = [];
+			const now = Date.now();
+
+			for (const acc of accounts) {
+				const isCooldown = acc.cooldownUntil && acc.cooldownUntil > now;
+				const statusBadge = isCooldown
+					? `[⏳ COOLDOWN ${Math.ceil((acc.cooldownUntil! - now) / 60000)}m]`
+					: accounts.length > 1 && acc.id === activeAccount?.id
+						? "[● ACTIVE]"
+						: "[○ STANDBY]";
+				const typeBadge = acc.credential.type === "oauth" ? "OAuth" : "API Key";
+				options.push(`${statusBadge} ${acc.label ?? acc.id} (${typeBadge})`);
+			}
+
+			options.push(`+ Add new account to ${providerName}`);
+			if (accounts.length > 1) {
+				options.push(`🗑 Remove an account...`);
+			}
+
+			const title = `Accounts for ${providerName}:`;
+			const onSelect = async (selected: string) => {
+				done();
+				if (selected.startsWith("+ Add new account")) {
+					const providerOption = this.findLoginProviderOptions(providerId)[0] ?? {
+						id: providerId,
+						name: providerName,
+						authType: provider?.auth.oauth ? "oauth" : "api_key",
+					};
+					await this.startProviderLogin(providerOption, () => this.showAccountsSelector(providerId), true);
+					return;
+				}
+				if (selected.startsWith("🗑 Remove")) {
+					this.showSelector((removeDone) => {
+						const removeOptions = accounts.map((a) => `${a.label ?? a.id} (${a.id})`);
+						const removeTitle = `Select account to remove from ${providerName}:`;
+						const onRemoveSelect = async (removeOpt: string) => {
+							removeDone();
+							const toRemove = accounts.find((a) => `${a.label ?? a.id} (${a.id})` === removeOpt);
+							if (toRemove) {
+								await this.session.modelRuntime.removeAccount(providerId, toRemove.id);
+								this.showStatus(`Removed account "${toRemove.label ?? toRemove.id}" from ${providerName}.`);
+							}
+						};
+						const onRemoveCancel = () => {
+							removeDone();
+							void this.showAccountsSelector(providerId);
+						};
+						const removeSelector = new ExtensionSelectorComponent(
+							removeTitle,
+							removeOptions,
+							onRemoveSelect,
+							onRemoveCancel,
+						);
+						return { component: removeSelector, focus: removeSelector, dispose: () => removeSelector.dispose() };
+					});
+					return;
+				}
+
+				// User clicked an account to switch to it
+				const chosenAccount = accounts.find((acc) => {
+					const isCooldown = acc.cooldownUntil && acc.cooldownUntil > now;
+					const statusBadge = isCooldown
+						? `[⏳ COOLDOWN ${Math.ceil((acc.cooldownUntil! - now) / 60000)}m]`
+						: accounts.length > 1 && acc.id === activeAccount?.id
+							? "[● ACTIVE]"
+							: "[○ STANDBY]";
+					const typeBadge = acc.credential.type === "oauth" ? "OAuth" : "API Key";
+					return `${statusBadge} ${acc.label ?? acc.id} (${typeBadge})` === selected;
+				});
+
+				if (chosenAccount) {
+					await this.session.modelRuntime.switchAccount(providerId, chosenAccount.id);
+					this.showStatus(
+						`Active account for ${providerName} switched to: ${chosenAccount.label ?? chosenAccount.id}`,
+					);
+				}
+			};
+
+			const onCancel = () => {
+				done();
+				this.ui.requestRender();
+			};
+
+			const selector = new ExtensionSelectorComponent(title, options, onSelect, onCancel);
+			return { component: selector, focus: selector, dispose: () => selector.dispose() };
+		});
 	}
 
 	private findLoginProviderOptions(providerRef: string): AuthSelectorProvider[] {
@@ -5958,7 +6114,7 @@ export class InteractiveMode {
 
 		const providerOptions = this.findLoginProviderOptions(providerRef);
 		if (providerOptions.length === 1) {
-			await this.startProviderLogin(providerOptions[0]!);
+			await this.promptOrStartProviderLogin(providerOptions[0]!);
 			return;
 		}
 
@@ -5973,12 +6129,56 @@ export class InteractiveMode {
 		this.showLoginProviderSelector(undefined, providerRef);
 	}
 
+	/**
+	 * Prompt the user if the provider already has account(s) configured,
+	 * giving them the option to add another account to the pool, manage accounts, or replace.
+	 */
+	private async promptOrStartProviderLogin(providerOption: AuthSelectorProvider, onBack?: () => void): Promise<void> {
+		const accounts = await this.session.modelRuntime.listAccounts(providerOption.id);
+		if (accounts.length > 0) {
+			this.showSelector((done) => {
+				const title = `${providerOption.name} already has ${accounts.length} account(s) configured.`;
+				const options = [
+					"Add another account to pool (Recommended)",
+					"Manage / Switch accounts (/accounts)",
+					"Replace existing credential",
+				];
+				const onSelect = (opt: string) => {
+					done();
+					if (opt.startsWith("Add another")) {
+						void this.startProviderLogin(providerOption, onBack, true);
+					} else if (opt.startsWith("Manage")) {
+						void this.showAccountsSelector(providerOption.id);
+					} else {
+						void this.startProviderLogin(providerOption, onBack, false);
+					}
+				};
+				const onCancel = () => {
+					done();
+					if (onBack) {
+						onBack();
+					} else {
+						this.ui.requestRender();
+					}
+				};
+				const selector = new ExtensionSelectorComponent(title, options, onSelect, onCancel);
+				return { component: selector, focus: selector, dispose: () => selector.dispose() };
+			});
+			return;
+		}
+		await this.startProviderLogin(providerOption, onBack);
+	}
+
 	/** `onBack` reopens the selector the login was started from when the user cancels it. */
-	private async startProviderLogin(providerOption: AuthSelectorProvider, onBack?: () => void): Promise<void> {
+	private async startProviderLogin(
+		providerOption: AuthSelectorProvider,
+		onBack?: () => void,
+		addToPool = false,
+	): Promise<void> {
 		if (providerOption.authType === "oauth") {
-			await this.showLoginDialog(providerOption.id, providerOption.name, onBack);
+			await this.showLoginDialog(providerOption.id, providerOption.name, onBack, addToPool);
 		} else if (providerOption.method?.login) {
-			await this.showApiKeyLoginDialog(providerOption.id, providerOption.name, onBack);
+			await this.showApiKeyLoginDialog(providerOption.id, providerOption.name, onBack, addToPool);
 		} else {
 			this.showAmbientAuthDialog(providerOption, onBack);
 		}
@@ -6016,7 +6216,7 @@ export class InteractiveMode {
 		if (providerOptions && options.length === 1) {
 			const providerOption = providerOptions[0];
 			if (providerOption) {
-				void this.startProviderLogin(providerOption);
+				void this.promptOrStartProviderLogin(providerOption);
 			}
 			return;
 		}
@@ -6035,7 +6235,9 @@ export class InteractiveMode {
 				if (providerOptions) {
 					const providerOption = providerOptions.find((provider) => provider.authType === authType);
 					if (providerOption) {
-						void this.startProviderLogin(providerOption, () => this.showLoginAuthTypeSelector(providerOptions));
+						void this.promptOrStartProviderLogin(providerOption, () =>
+							this.showLoginAuthTypeSelector(providerOptions),
+						);
 					}
 					return;
 				}
@@ -6060,7 +6262,7 @@ export class InteractiveMode {
 		});
 	}
 
-	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string): void {
+	private showLoginProviderSelector(authType?: "api_key" | "oauth", initialSearchInput?: string): void {
 		const providerOptions = this.getLoginProviderOptions(authType);
 		if (providerOptions.length === 0) {
 			const message =
@@ -6087,7 +6289,7 @@ export class InteractiveMode {
 						return;
 					}
 
-					await this.startProviderLogin(providerOption, () =>
+					await this.promptOrStartProviderLogin(providerOption, () =>
 						this.showLoginProviderSelector(authType, initialSearchInput),
 					);
 				},
@@ -6291,7 +6493,12 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private async showApiKeyLoginDialog(providerId: string, providerName: string, onBack?: () => void): Promise<void> {
+	private async showApiKeyLoginDialog(
+		providerId: string,
+		providerName: string,
+		onBack?: () => void,
+		addToPool = false,
+	): Promise<void> {
 		const previousModel = this.session.model;
 
 		const dialog = new LoginDialogComponent(
@@ -6324,7 +6531,7 @@ export class InteractiveMode {
 		};
 
 		try {
-			await this.loginProvider(dialog, providerId, providerName, "api_key");
+			await this.loginProvider(dialog, providerId, providerName, "api_key", addToPool);
 			restoreEditor();
 			await this.completeProviderAuthentication(providerId, providerName, "api_key", previousModel);
 		} catch (error: unknown) {
@@ -6419,25 +6626,32 @@ export class InteractiveMode {
 		providerId: string,
 		providerName: string,
 		method: "api_key" | "oauth",
+		addToPool = false,
 	): Promise<void> {
 		this.programStatus.setBlocked("login", { kind: "auth", message: `Log in to ${providerName}` });
 		try {
-			await this.session.modelRuntime.login(
-				providerId,
-				method,
-				{
-					signal: dialog.signal,
-					prompt: (prompt) => this.showAuthPrompt(dialog, prompt, providerId),
-					notify: (event) => this.notifyAuthDialog(dialog, event),
-				},
-				{ getDeviceId: () => this.settingsManager.getOrCreateDeviceId() },
-			);
+			const interaction = {
+				signal: dialog.signal,
+				prompt: (prompt: AuthPrompt) => this.showAuthPrompt(dialog, prompt, providerId),
+				notify: (event: AuthEvent) => this.notifyAuthDialog(dialog, event),
+			};
+			const options = { getDeviceId: () => this.settingsManager.getOrCreateDeviceId() };
+			if (addToPool) {
+				await this.session.modelRuntime.addAccount(providerId, method, interaction, undefined, options);
+			} else {
+				await this.session.modelRuntime.login(providerId, method, interaction, options);
+			}
 		} finally {
 			this.programStatus.setBlocked("login", undefined);
 		}
 	}
 
-	private async showLoginDialog(providerId: string, providerName: string, onBack?: () => void): Promise<void> {
+	private async showLoginDialog(
+		providerId: string,
+		providerName: string,
+		onBack?: () => void,
+		addToPool = false,
+	): Promise<void> {
 		const previousModel = this.session.model;
 		const dialog = new LoginDialogComponent(this.ui, providerId, (_success, _message) => {}, providerName);
 		this.editorContainer.clear();
@@ -6453,7 +6667,7 @@ export class InteractiveMode {
 		};
 
 		try {
-			await this.loginProvider(dialog, providerId, providerName, "oauth");
+			await this.loginProvider(dialog, providerId, providerName, "oauth", addToPool);
 			restoreEditor();
 			await this.completeProviderAuthentication(providerId, providerName, "oauth", previousModel);
 			if (providerId === RADIUS_PROVIDER_ID) this.offerRadiusMcpServer(providerId, providerName);

@@ -3,7 +3,17 @@
  * Provider auth orchestration belongs to ModelRuntime and pi-ai Models.
  */
 
-import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import {
+	type AccountEntry,
+	type AccountPoolCredential,
+	type ApiKeyCredential,
+	type AuthOperationOptions,
+	type Credential,
+	type CredentialInfo,
+	type CredentialStore,
+	type OAuthCredential,
+	rotateAccountInStore,
+} from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -442,6 +452,21 @@ export class AuthStorage implements CredentialStore {
 	async read(provider: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
 		const credential = (await this.readLatestData(options))[provider];
 		options?.signal?.throwIfAborted();
+		if (credential?.type === "pool") {
+			const resolvedAccounts = credential.accounts.map((acc) => {
+				if (acc.credential.type === "api_key" && acc.credential.key !== undefined) {
+					return {
+						...acc,
+						credential: {
+							...acc.credential,
+							key: resolveConfigValue(acc.credential.key, acc.credential.env),
+						},
+					};
+				}
+				return acc;
+			});
+			return { ...credential, accounts: resolvedAccounts };
+		}
 		if (credential?.type !== "api_key") return credential;
 		if (credential.key === undefined) return credential;
 		return { ...credential, key: resolveConfigValue(credential.key, credential.env) };
@@ -486,7 +511,158 @@ export class AuthStorage implements CredentialStore {
 	async list(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
 		const entries = Object.entries(await this.readLatestData(options));
 		options?.signal?.throwIfAborted();
-		return entries.map(([providerId, credential]) => ({ providerId, type: credential.type }));
+		return entries.map(([providerId, credential]) => {
+			if (credential.type === "pool") {
+				const active = credential.accounts.find((a) => a.id === credential.activeId);
+				return {
+					providerId,
+					type: credential.type,
+					activeLabel: active?.label ?? credential.activeId,
+					accountCount: credential.accounts.length,
+				};
+			}
+			return { providerId, type: credential.type };
+		});
+	}
+
+	/** Get all accounts for a provider, converting single credentials to a virtual pool view if needed. */
+	async getAccounts(providerId: string, options?: AuthOperationOptions): Promise<readonly AccountEntry[]> {
+		const credential = await this.read(providerId, options);
+		if (!credential) return [];
+		if (credential.type === "pool") {
+			return credential.accounts;
+		}
+		const email =
+			(credential as { email?: string; user?: string }).email ||
+			(credential as { email?: string; user?: string }).user;
+		const defaultLabel = email || (credential.type === "oauth" ? "OAuth Account" : "Default API Key");
+		return [{ id: "default", label: defaultLabel, credential }];
+	}
+
+	/** Get current active account ID for a provider. */
+	async getActiveAccountId(providerId: string, options?: AuthOperationOptions): Promise<string | undefined> {
+		const credential = await this.read(providerId, options);
+		if (!credential) return undefined;
+		if (credential.type === "pool") return credential.activeId;
+		return "default";
+	}
+
+	/**
+	 * Add an account to a provider's pool.
+	 * If the provider currently has a single credential, converts it to an AccountPoolCredential.
+	 */
+	async addAccount(
+		providerId: string,
+		entry: { id?: string; label?: string; credential: ApiKeyCredential | OAuthCredential },
+		setAsActive = true,
+		options?: AuthOperationOptions,
+	): Promise<AccountPoolCredential> {
+		let resultPool: AccountPoolCredential | undefined;
+		await this.modify(
+			providerId,
+			async (current) => {
+				const newId = entry.id || `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+				const newAccount: AccountEntry = {
+					id: newId,
+					label: entry.label || (entry.credential.type === "oauth" ? "OAuth Account" : "API Key"),
+					credential: entry.credential,
+				};
+
+				if (!current) {
+					resultPool = {
+						type: "pool",
+						activeId: newId,
+						accounts: [newAccount],
+					};
+					return resultPool;
+				}
+
+				if (current.type === "pool") {
+					const existingIdx = current.accounts.findIndex((a) => a.id === newId);
+					const accounts = [...current.accounts];
+					if (existingIdx !== -1) {
+						accounts[existingIdx] = newAccount;
+					} else {
+						accounts.push(newAccount);
+					}
+					resultPool = {
+						...current,
+						activeId: setAsActive ? newId : current.activeId,
+						accounts,
+					};
+					return resultPool;
+				}
+
+				// Converting single credential to pool
+				const firstAccount: AccountEntry = {
+					id: "account-1",
+					label: current.type === "oauth" ? "Primary Account (OAuth)" : "Primary Account (API Key)",
+					credential: current,
+				};
+				resultPool = {
+					type: "pool",
+					activeId: setAsActive ? newId : "account-1",
+					accounts: [firstAccount, newAccount],
+				};
+				return resultPool;
+			},
+			options,
+		);
+		return resultPool!;
+	}
+
+	/** Remove an account from a provider's pool. */
+	async removeAccount(providerId: string, accountId: string, options?: AuthOperationOptions): Promise<void> {
+		await this.modify(
+			providerId,
+			async (current) => {
+				if (!current) return undefined;
+				if (current.type !== "pool") {
+					return undefined; // Deletes the single credential
+				}
+				const remaining = current.accounts.filter((a) => a.id !== accountId);
+				if (remaining.length === 0) {
+					return undefined; // All accounts removed, delete provider entry
+				}
+				const nextActiveId = current.activeId === accountId ? remaining[0].id : current.activeId;
+				return {
+					...current,
+					activeId: nextActiveId,
+					accounts: remaining,
+				};
+			},
+			options,
+		);
+	}
+
+	/** Set active account in a pool. */
+	async setActiveAccount(providerId: string, accountId: string, options?: AuthOperationOptions): Promise<boolean> {
+		let success = false;
+		await this.modify(
+			providerId,
+			async (current) => {
+				if (!current || current.type !== "pool") return undefined;
+				const exists = current.accounts.some((a) => a.id === accountId);
+				if (!exists) return undefined;
+				success = true;
+				return {
+					...current,
+					activeId: accountId,
+				};
+			},
+			options,
+		);
+		return success;
+	}
+
+	/** Rotate account in pool. */
+	async rotateAccount(
+		providerId: string,
+		failedAccountId?: string,
+		cooldownMs: number = 5 * 60 * 1000,
+		options?: AuthOperationOptions,
+	): Promise<{ rotated: boolean; activeAccount?: AccountEntry }> {
+		return rotateAccountInStore(this, providerId, failedAccountId, cooldownMs, options?.signal);
 	}
 }
 
