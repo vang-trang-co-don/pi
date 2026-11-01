@@ -1,0 +1,92 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag/version to release (e.g. v1.4.0)'
+        required: false
+        default: 'v1.4.0'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-binaries-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build & Release Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build all packages
+        run: npm run build
+
+      - name: Build standalone binaries
+        run: |
+          mkdir -p binaries-out
+          ./scripts/build-binaries.sh --skip-install --skip-build --out ./binaries-out
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd binaries-out
+          sha256sum *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ "$TAG" == "main" || "$TAG" == "" ]]; then
+            TAG="v1.4.0"
+          fi
+
+          NOTES="### Pi with Antigravity & Multi-Account Support (${TAG})
+
+Pre-compiled standalone binaries. No Node.js or npm required.
+
+#### Quick Install:
+\`\`\`bash
+curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash
+\`\`\`
+
+#### Included Features:
+- **Antigravity Provider**: Google Cloud Code PA streaming API with OAuth.
+- **Multi-Account Pooling**: Auto-rotate across multiple accounts with in-flight failover.
+- **Self-Update**: Built-in \`pi update\` support."
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Updating existing release $TAG..."
+            gh release upload "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS --clobber
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS \
+              --title "Pi ${TAG} (Antigravity & Multi-Account)" \
+              --notes "$NOTES" \
+              --latest
+          fi
