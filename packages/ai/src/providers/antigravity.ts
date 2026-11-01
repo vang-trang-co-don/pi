@@ -1,5 +1,5 @@
 import { googleCloudCodePaApi } from "../api/google-cloud-code-pa.lazy.ts";
-import { getAntigravityUserAgent, registerAntigravityRouting } from "../api/google-cloud-code-pa.ts";
+import { getAntigravityUserAgent, registerAntigravityRouting } from "../api/google-cloud-code-pa-routing.ts";
 import { lazyOAuth } from "../auth/helpers.ts";
 import { loadAntigravityOAuth } from "../auth/oauth/load.ts";
 import { createProvider, type Provider, type RefreshModelsContext } from "../models.ts";

@@ -9,7 +9,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import lockfile from "proper-lockfile";
@@ -773,15 +773,26 @@ async function runConfiguredSelfUpdate(argv: string[], plan: SelfUpdatePlan): Pr
 }
 
 function findGitRootForSelfUpdate(): string | undefined {
+	if (process.env.VITEST) return undefined;
 	try {
-		const entrypoint = process.argv[1];
-		const searchDir = entrypoint ? dirname(resolve(entrypoint)) : process.cwd();
+		const packageDir = getPackageDir();
+		if (packageDir.includes("node_modules")) return undefined;
+
 		const root = execSync("git rev-parse --show-toplevel", {
-			cwd: searchDir,
+			cwd: packageDir,
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "ignore"],
 		}).trim();
-		return root || undefined;
+		if (!root) return undefined;
+
+		if (
+			existsSync(join(root, "packages", "coding-agent")) &&
+			existsSync(join(root, "packages", "ai")) &&
+			existsSync(join(root, "scripts", "build-coding-agent-bundle.mjs"))
+		) {
+			return root;
+		}
+		return undefined;
 	} catch {
 		return undefined;
 	}
