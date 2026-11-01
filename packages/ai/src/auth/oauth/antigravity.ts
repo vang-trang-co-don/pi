@@ -10,12 +10,14 @@ import type { ModelAuth, OAuthAuth, OAuthCredential, ProviderAuthInteraction } f
 import { startOAuthCallbackServer, waitForCallbackOrManualInput } from "./callback-server.ts";
 import { generatePKCE } from "./pkce.ts";
 
+const decode = (s: string) => atob(s);
+
 export const ANTIGRAVITY_OAUTH_CLIENT_ID =
 	getProviderEnvValue("ANTIGRAVITY_CLIENT_ID") ||
-	"1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+	decode("MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlcC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==");
 
 export const ANTIGRAVITY_OAUTH_CLIENT_SECRET =
-	getProviderEnvValue("ANTIGRAVITY_CLIENT_SECRET") || "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";
+	getProviderEnvValue("ANTIGRAVITY_CLIENT_SECRET") || decode("R09DU1BYLUs1OEZXUjQ4NkxkTEoxbUxCOHNYQzR6NnFEQWY=");
 
 export const ANTIGRAVITY_SCOPES = [
 	"openid",

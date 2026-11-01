@@ -4,7 +4,7 @@ import { lazyOAuth } from "../auth/helpers.ts";
 import { loadAntigravityOAuth } from "../auth/oauth/load.ts";
 import { createProvider, type Provider, type RefreshModelsContext } from "../models.ts";
 import type { Model } from "../types.ts";
-import { ANTIGRAVITY_MODELS } from "./antigravity.models.ts";
+import { ANTIGRAVITY_MODELS } from "./antigravity-models.ts";
 
 export interface AntigravityProviderOptions {
 	id?: string;

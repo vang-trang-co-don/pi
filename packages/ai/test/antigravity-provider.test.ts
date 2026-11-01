@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { builtinProviders } from "../src/providers/all.ts";
-import { ANTIGRAVITY_MODELS } from "../src/providers/antigravity.models.ts";
 import {
 	antigravityProvider,
 	fetchAntigravityRemoteModels,
 	parseAvailableModelsPayload,
 } from "../src/providers/antigravity.ts";
+import { ANTIGRAVITY_MODELS } from "../src/providers/antigravity-models.ts";
 
 describe("Antigravity Provider & Models", () => {
 	it("initializes antigravityProvider with baseline models and OAuth auth", () => {
