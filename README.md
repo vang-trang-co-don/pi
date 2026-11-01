@@ -22,7 +22,21 @@ Use Pi [interactively](packages/coding-agent/docs/usage.md), automate it in [pri
 
 ## Getting started
 
-Install the command-line interface:
+Install this custom build with **Antigravity & Multi-Account Pooling** support (standalone pre-compiled binary):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash
+```
+
+- **Standalone AOT**: Runs immediately without requiring Node.js or npm.
+- **Antigravity**: Built-in Google Cloud Code PA streaming provider with OAuth support.
+- **Multi-Account**: Auto-rotates multiple provider accounts on rate limit with in-flight retry.
+- **Easy Update**: Keep up to date with `pi update`.
+
+<details>
+<summary>Original upstream installation</summary>
+
+Install the original upstream command-line interface:
 
 ```bash
 curl -fsSL https://pi.dev/install.sh | sh
@@ -39,6 +53,8 @@ The installer pins all dependencies and updates Pi with `pi update`. Alternative
 ```bash
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 ```
+
+</details>
 
 Pi requires Node.js 22.19 or newer. The macOS, Linux, and Windows installers can install it if needed. Pi does not require dependency lifecycle scripts for a normal npm installation.
 

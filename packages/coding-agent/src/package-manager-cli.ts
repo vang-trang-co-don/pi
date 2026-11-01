@@ -1280,6 +1280,27 @@ export async function handlePackageCommand(
 					}
 
 					const installMethod = detectInstallMethod();
+					if (installMethod === "bun-binary") {
+						console.log(chalk.dim(`Updating ${APP_NAME} binary from latest release...`));
+						try {
+							execSync(
+								"curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash",
+								{
+									stdio: "inherit",
+								},
+							);
+							return true;
+						} catch {
+							console.error(chalk.red("Binary self-update failed. Run the installer manually:"));
+							console.error(
+								chalk.dim(
+									"curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash",
+								),
+							);
+							process.exitCode = 1;
+							return true;
+						}
+					}
 					if (process.platform === "win32" && installMethod !== "npm" && installMethod !== "pnpm") {
 						console.error(
 							chalk.red(`${APP_NAME} self-update on Windows is only supported for npm and pnpm installs.`),
