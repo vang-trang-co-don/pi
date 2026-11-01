@@ -62,23 +62,25 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          if [[ "$TAG" == "main" || "$TAG" == "" ]]; then
+          if [ "$TAG" = "main" ] || [ -z "$TAG" ]; then
             TAG="v1.4.0"
           fi
 
-          NOTES="### Pi with Antigravity & Multi-Account Support (${TAG})
+          cat << 'EOF' > release-notes.md
+          ### Pi with Antigravity & Multi-Account Support
 
-Pre-compiled standalone binaries. No Node.js or npm required.
+          Pre-compiled standalone binaries. No Node.js or npm required.
 
-#### Quick Install:
-\`\`\`bash
-curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash
-\`\`\`
+          #### Quick Install:
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash
+          ```
 
-#### Included Features:
-- **Antigravity Provider**: Google Cloud Code PA streaming API with OAuth.
-- **Multi-Account Pooling**: Auto-rotate across multiple accounts with in-flight failover.
-- **Self-Update**: Built-in \`pi update\` support."
+          #### Included Features:
+          - **Antigravity Provider**: Google Cloud Code PA streaming API with OAuth.
+          - **Multi-Account Pooling**: Auto-rotate across multiple accounts with in-flight failover.
+          - **Self-Update**: Built-in `pi update` support.
+          EOF
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Updating existing release $TAG..."
@@ -87,6 +89,6 @@ curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.s
             echo "Creating new release $TAG..."
             gh release create "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS \
               --title "Pi ${TAG} (Antigravity & Multi-Account)" \
-              --notes "$NOTES" \
+              --notes-file release-notes.md \
               --latest
           fi
