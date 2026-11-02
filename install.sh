@@ -42,19 +42,26 @@ else
   ARCHIVE_NAME="pi-${PLATFORM}.tar.gz"
 fi
 
-DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ARCHIVE_NAME}"
+# Determine download URL: check nightly release first, fall back to latest
+NIGHTLY_URL="https://github.com/${REPO}/releases/download/nightly/${ARCHIVE_NAME}"
+LATEST_URL="https://github.com/${REPO}/releases/latest/download/${ARCHIVE_NAME}"
 
+DOWNLOAD_URL="$NIGHTLY_URL"
 printf "\033[1;36m==>\033[0m Downloading %s from GitHub Releases...\n" "$ARCHIVE_NAME"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 DOWNLOADED=0
 if command -v curl >/dev/null 2>&1; then
-  if curl -fL --progress-bar -o "$TMP_DIR/$ARCHIVE_NAME" "$DOWNLOAD_URL"; then
+  if curl -fL --progress-bar -o "$TMP_DIR/$ARCHIVE_NAME" "$NIGHTLY_URL"; then
+    DOWNLOADED=1
+  elif curl -fL --progress-bar -o "$TMP_DIR/$ARCHIVE_NAME" "$LATEST_URL"; then
     DOWNLOADED=1
   fi
 elif command -v wget >/dev/null 2>&1; then
-  if wget -q --show-progress -O "$TMP_DIR/$ARCHIVE_NAME" "$DOWNLOAD_URL"; then
+  if wget -q --show-progress -O "$TMP_DIR/$ARCHIVE_NAME" "$NIGHTLY_URL"; then
+    DOWNLOADED=1
+  elif wget -q --show-progress -O "$TMP_DIR/$ARCHIVE_NAME" "$LATEST_URL"; then
     DOWNLOADED=1
   fi
 else
