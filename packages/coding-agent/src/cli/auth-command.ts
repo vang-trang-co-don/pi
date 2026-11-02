@@ -2,7 +2,7 @@ import type { AuthResult } from "@earendil-works/pi-ai";
 import { APP_NAME } from "../config.ts";
 import type { Args } from "./args.ts";
 
-export type AuthCommandKind = "check" | "api_key" | "bearer_token" | "accounts" | "switch";
+export type AuthCommandKind = "check" | "api_key" | "bearer_token" | "accounts" | "switch" | "usage";
 
 export interface AuthCommand {
 	kind: AuthCommandKind;
@@ -21,6 +21,7 @@ const AUTH_COMMAND_USAGE: Record<AuthCommandKind, string> = {
 	bearer_token: `${APP_NAME} auth print-bearer-token --provider <provider> [--model <model>] [--min-expiry <duration>]`,
 	accounts: `${APP_NAME} auth accounts [--provider <provider>] [--json]`,
 	switch: `${APP_NAME} auth switch --provider <provider> --account <accountId>`,
+	usage: `${APP_NAME} auth usage [--provider <provider>] [--account <account>] [--json]`,
 };
 
 export function getAuthCommandName(kind: AuthCommandKind): string {
@@ -32,7 +33,9 @@ export function getAuthCommandName(kind: AuthCommandKind): string {
 				? "auth print-bearer-token"
 				: kind === "accounts"
 					? "auth accounts"
-					: "auth switch";
+					: kind === "switch"
+						? "auth switch"
+						: "auth usage";
 }
 
 export function getAuthCommandUsage(kind: AuthCommandKind): string {
@@ -58,23 +61,34 @@ Auth commands manage provider accounts, check readiness, or print credentials.`)
 }
 
 export function parseAuthCommand(args: string[]): AuthCommand | undefined {
-	if (args[0] !== "auth") return undefined;
+	if (args[0] !== "auth" && args[0] !== "usage") return undefined;
 
-	const kind =
-		args[1] === "check"
-			? "check"
-			: args[1] === "print-api-key"
-				? "api_key"
-				: args[1] === "print-bearer-token"
-					? "bearer_token"
-					: args[1] === "accounts"
-						? "accounts"
-						: args[1] === "switch"
-							? "switch"
-							: undefined;
+	let kind: AuthCommandKind | undefined;
+	let startIndex = 2;
+
+	if (args[0] === "usage") {
+		kind = "usage";
+		startIndex = 1;
+	} else if (args[1] === "usage") {
+		kind = "usage";
+		startIndex = 2;
+	} else {
+		kind =
+			args[1] === "check"
+				? "check"
+				: args[1] === "print-api-key"
+					? "api_key"
+					: args[1] === "print-bearer-token"
+						? "bearer_token"
+						: args[1] === "accounts"
+							? "accounts"
+							: args[1] === "switch"
+								? "switch"
+								: undefined;
+	}
 	if (!kind) {
 		throw new AuthCommandError(
-			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth accounts", "${APP_NAME} auth switch", "${APP_NAME} auth print-api-key", or "${APP_NAME} auth check".`,
+			`Unknown auth command "${args[1] ?? ""}". Use "${APP_NAME} auth accounts", "${APP_NAME} auth switch", "${APP_NAME} auth usage", "${APP_NAME} auth print-api-key", or "${APP_NAME} auth check".`,
 		);
 	}
 
@@ -83,7 +97,7 @@ export function parseAuthCommand(args: string[]): AuthCommand | undefined {
 	let credentials = false;
 	let noRefresh = false;
 	let minExpiryMs: number | undefined;
-	for (let index = 2; index < args.length; index++) {
+	for (let index = startIndex; index < args.length; index++) {
 		const arg = args[index];
 		if (arg === "--min-expiry") {
 			if (kind !== "bearer_token")

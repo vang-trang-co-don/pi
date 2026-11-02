@@ -3357,6 +3357,12 @@ export class InteractiveMode {
 				await this.showAccountsSelector(providerRef);
 				return;
 			}
+			if (text === "/usage" || text.startsWith("/usage ")) {
+				const accountArg = text.startsWith("/usage ") ? text.slice(7).trim() : undefined;
+				this.editor.setText("");
+				await this.handleUsageCommand(accountArg);
+				return;
+			}
 			if (text === "/login" || text.startsWith("/login ")) {
 				const providerRef = text.startsWith("/login ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
@@ -5946,7 +5952,7 @@ export class InteractiveMode {
 	private async showAccountsSelector(providerRef?: string): Promise<void> {
 		const credentials = await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) });
 		if (credentials.length === 0) {
-			this.showStatus("No provider credentials configured. Run /login to add an account.");
+			this.showStatus("No provider credentials configured.");
 			return;
 		}
 
@@ -5966,15 +5972,13 @@ export class InteractiveMode {
 			// Show provider selector first
 			const providerOptions = credentials.map((c) => {
 				const p = this.session.modelRuntime.getProvider(c.providerId);
-				const count = c.accountCount ?? 1;
-				const label = c.activeLabel ? ` (${c.activeLabel})` : "";
 				return {
 					id: c.providerId,
-					label: `${p?.name ?? c.providerId}${label} - ${count} account${count > 1 ? "s" : ""}`,
+					label: p?.name ?? c.providerId,
 				};
 			});
 			this.showSelector((done) => {
-				const title = "Select a provider to manage accounts:";
+				const title = "Accounts";
 				const onSelect = (option: string) => {
 					done();
 					const selected = providerOptions.find((p) => p.label === option);
@@ -6007,27 +6011,34 @@ export class InteractiveMode {
 				accounts.find((a) => !a.disabled && (!a.cooldownUntil || a.cooldownUntil <= Date.now())) ?? accounts[0];
 			const options: string[] = [];
 			const now = Date.now();
+			const accountByOption = new Map<string, (typeof accounts)[0]>();
 
 			for (const acc of accounts) {
 				const isCooldown = acc.cooldownUntil && acc.cooldownUntil > now;
 				const statusBadge = isCooldown
-					? `[⏳ COOLDOWN ${Math.ceil((acc.cooldownUntil! - now) / 60000)}m]`
-					: accounts.length > 1 && acc.id === activeAccount?.id
-						? "[● ACTIVE]"
-						: "[○ STANDBY]";
-				const typeBadge = acc.credential.type === "oauth" ? "OAuth" : "API Key";
-				options.push(`${statusBadge} ${acc.label ?? acc.id} (${typeBadge})`);
+					? `⏳ ${Math.ceil((acc.cooldownUntil! - now) / 60000)}m `
+					: accounts.length > 1
+						? acc.id === activeAccount?.id
+							? "● "
+							: "○ "
+						: "";
+				const optLabel = `${statusBadge}${acc.label ?? acc.id}`;
+				options.push(optLabel);
+				accountByOption.set(optLabel, acc);
 			}
 
-			options.push(`+ Add new account to ${providerName}`);
+			const addAccountLabel = "Add account";
+			const removeAccountLabel = "Remove account";
+
+			options.push(addAccountLabel);
 			if (accounts.length > 1) {
-				options.push(`🗑 Remove an account...`);
+				options.push(removeAccountLabel);
 			}
 
-			const title = `Accounts for ${providerName}:`;
+			const title = providerName;
 			const onSelect = async (selected: string) => {
 				done();
-				if (selected.startsWith("+ Add new account")) {
+				if (selected === addAccountLabel) {
 					const providerOption = this.findLoginProviderOptions(providerId)[0] ?? {
 						id: providerId,
 						name: providerName,
@@ -6036,16 +6047,21 @@ export class InteractiveMode {
 					await this.startProviderLogin(providerOption, () => this.showAccountsSelector(providerId), true);
 					return;
 				}
-				if (selected.startsWith("🗑 Remove")) {
+				if (selected === removeAccountLabel) {
 					this.showSelector((removeDone) => {
-						const removeOptions = accounts.map((a) => `${a.label ?? a.id} (${a.id})`);
-						const removeTitle = `Select account to remove from ${providerName}:`;
+						const removeAccountByOption = new Map<string, (typeof accounts)[0]>();
+						const removeOptions = accounts.map((a) => {
+							const lbl = a.label ?? a.id;
+							removeAccountByOption.set(lbl, a);
+							return lbl;
+						});
+						const removeTitle = "Remove Account";
 						const onRemoveSelect = async (removeOpt: string) => {
 							removeDone();
-							const toRemove = accounts.find((a) => `${a.label ?? a.id} (${a.id})` === removeOpt);
+							const toRemove = removeAccountByOption.get(removeOpt);
 							if (toRemove) {
 								await this.session.modelRuntime.removeAccount(providerId, toRemove.id);
-								this.showStatus(`Removed account "${toRemove.label ?? toRemove.id}" from ${providerName}.`);
+								this.showStatus(`Removed ${toRemove.label ?? toRemove.id}.`);
 							}
 						};
 						const onRemoveCancel = () => {
@@ -6064,16 +6080,7 @@ export class InteractiveMode {
 				}
 
 				// User clicked an account to switch to it
-				const chosenAccount = accounts.find((acc) => {
-					const isCooldown = acc.cooldownUntil && acc.cooldownUntil > now;
-					const statusBadge = isCooldown
-						? `[⏳ COOLDOWN ${Math.ceil((acc.cooldownUntil! - now) / 60000)}m]`
-						: accounts.length > 1 && acc.id === activeAccount?.id
-							? "[● ACTIVE]"
-							: "[○ STANDBY]";
-					const typeBadge = acc.credential.type === "oauth" ? "OAuth" : "API Key";
-					return `${statusBadge} ${acc.label ?? acc.id} (${typeBadge})` === selected;
-				});
+				const chosenAccount = accountByOption.get(selected);
 
 				if (chosenAccount) {
 					await this.session.modelRuntime.switchAccount(providerId, chosenAccount.id);
@@ -6137,17 +6144,13 @@ export class InteractiveMode {
 		const accounts = await this.session.modelRuntime.listAccounts(providerOption.id);
 		if (accounts.length > 0) {
 			this.showSelector((done) => {
-				const title = `${providerOption.name} already has ${accounts.length} account(s) configured.`;
-				const options = [
-					"Add another account to pool (Recommended)",
-					"Manage / Switch accounts (/accounts)",
-					"Replace existing credential",
-				];
+				const title = providerOption.name;
+				const options = ["Add account", "Switch account", "Replace credential"];
 				const onSelect = (opt: string) => {
 					done();
-					if (opt.startsWith("Add another")) {
+					if (opt === "Add account") {
 						void this.startProviderLogin(providerOption, onBack, true);
-					} else if (opt.startsWith("Manage")) {
+					} else if (opt === "Switch account") {
 						void this.showAccountsSelector(providerOption.id);
 					} else {
 						void this.startProviderLogin(providerOption, onBack, false);
@@ -7004,6 +7007,68 @@ export class InteractiveMode {
 		const displayName = sessionName ?? name;
 		this.chatContainer.addChild(new ThemedText(() => theme.fg("dim", `Session name set: ${displayName}`), 1, 0));
 		this.ui.requestRender();
+	}
+
+	private async handleUsageCommand(accountArg?: string): Promise<void> {
+		this.showStatus("Fetching usage...");
+		try {
+			const activeProvider = this.session.model?.provider === "antigravity" ? "antigravity" : "antigravity";
+			const quotas = await this.session.modelRuntime.getQuotaSummary({
+				providerId: activeProvider,
+				accountId: accountArg,
+				signal: AbortSignal.timeout(15_000),
+			});
+
+			const formatBar = (fraction: number, width = 10): string => {
+				const f = Math.max(0, Math.min(1, fraction));
+				const filled = Math.round(f * width);
+				return `[${"█".repeat(filled)}${"░".repeat(width - filled)}] ${Math.round(f * 100)
+					.toString()
+					.padStart(3)}%`;
+			};
+
+			const formatReset = (resetTime?: string): string => {
+				if (!resetTime) return "";
+				const diff = new Date(resetTime).getTime() - Date.now();
+				if (diff <= 0) return "resets soon";
+				const d = Math.floor(diff / 86400000);
+				const h = Math.floor((diff % 86400000) / 3600000);
+				const m = Math.floor((diff % 3600000) / 60000);
+				let timeStr = "";
+				if (d > 0) timeStr = `${d}d ${h}h`;
+				else if (h > 0) timeStr = `${h}h ${m}m`;
+				else timeStr = `${m}m`;
+				return `resets in ${timeStr}`;
+			};
+
+			const renderUsage = (): string => {
+				let out = "";
+				for (let i = 0; i < quotas.length; i++) {
+					const q = quotas[i]!;
+					const activeTag = q.isActive ? theme.fg("dim", " (Active)") : "";
+					const emailTag = q.email ? theme.fg("dim", ` <${q.email}>`) : "";
+					out += `${theme.bold(q.accountLabel)}${emailTag}${activeTag}\n`;
+					for (const g of q.summary.groups) {
+						out += `  ${theme.bold(g.displayName)}\n`;
+						for (const b of g.buckets) {
+							const windowLabel =
+								b.window === "weekly" ? "Weekly" : b.window === "5h" ? "5-Hour" : b.displayName;
+							const bar = formatBar(b.remainingFraction);
+							const reset = theme.fg("dim", formatReset(b.resetTime));
+							out += `    ${windowLabel.padEnd(8)} ${bar}   ${reset}\n`;
+						}
+					}
+					if (i < quotas.length - 1) out += "\n";
+				}
+				return out.trimEnd();
+			};
+
+			this.chatContainer.addChild(new Spacer(1));
+			this.chatContainer.addChild(new ThemedText(renderUsage, 1, 0));
+			this.ui.requestRender();
+		} catch (err: unknown) {
+			this.showStatus(err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	private handleSessionCommand(): void {

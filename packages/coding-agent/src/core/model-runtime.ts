@@ -58,7 +58,9 @@ import {
 	type ProviderRequestOptions,
 	type SimpleStreamOptions,
 	type StreamOptions,
+	type UserQuotaSummary,
 } from "@earendil-works/pi-ai";
+import { fetchUserQuotaSummary } from "@earendil-works/pi-ai/api/google-cloud-code-pa";
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { personalizeOpenRouterCatalog } from "@earendil-works/pi-ai/providers/openrouter";
 import {
@@ -918,6 +920,122 @@ export class ModelRuntime implements Models {
 			const remaining = await store.read(providerId, options);
 			await this.synchronizeCredentialState(providerId, remaining ? "login" : "logout", remaining, signal);
 		});
+	}
+
+	async getQuotaSummary(options?: { providerId?: string; accountId?: string; signal?: AbortSignal }): Promise<
+		Array<{
+			providerId: string;
+			accountId: string;
+			accountLabel: string;
+			email?: string;
+			isActive: boolean;
+			summary: UserQuotaSummary;
+		}>
+	> {
+		const targetProvider = options?.providerId ?? "antigravity";
+		const signal = operationSignal(options?.signal);
+		const provider = this.getProvider(targetProvider);
+		if (!provider) {
+			throw new Error(`Provider "${targetProvider}" not found.`);
+		}
+		const accounts = await this.listAccounts(targetProvider, options);
+		if (accounts.length === 0) {
+			throw new Error(`No accounts configured for "${targetProvider}".`);
+		}
+
+		const store = this.credentials.backingStore as {
+			getActiveAccountId?: (p: string, o?: AuthOperationOptions) => Promise<string | undefined>;
+			addAccount?: (p: string, entry: any, setActive?: boolean, o?: AuthOperationOptions) => Promise<any>;
+		};
+		let activeId: string | undefined;
+		if (typeof store.getActiveAccountId === "function") {
+			activeId = await store.getActiveAccountId(targetProvider, options);
+		}
+
+		let targets: readonly AccountEntry[] = accounts;
+		if (options?.accountId && options.accountId !== "all") {
+			const filtered = accounts.filter(
+				(a) => a.id === options.accountId || a.label?.toLowerCase() === options.accountId?.toLowerCase(),
+			);
+			if (filtered.length > 0) targets = filtered;
+		} else if (options?.accountId !== "all" && activeId) {
+			const active = accounts.find((a) => a.id === activeId);
+			if (active) targets = [active];
+		} else if (options?.accountId !== "all") {
+			targets = [accounts[0]];
+		}
+
+		const results: Array<{
+			providerId: string;
+			accountId: string;
+			accountLabel: string;
+			email?: string;
+			isActive: boolean;
+			summary: UserQuotaSummary;
+		}> = [];
+
+		for (const acc of targets) {
+			let cred = acc.credential;
+			if (cred.type !== "oauth") {
+				continue;
+			}
+			if (cred.expires && cred.expires <= Date.now() && cred.refresh && provider.auth.oauth) {
+				try {
+					cred = await provider.auth.oauth.refresh(cred, signal);
+					if (typeof store.addAccount === "function") {
+						await store.addAccount(
+							targetProvider,
+							{ id: acc.id, label: acc.label, credential: cred },
+							acc.id === activeId,
+							options,
+						);
+					}
+				} catch {
+					// Continue with existing token
+				}
+			}
+
+			let summary: UserQuotaSummary;
+			try {
+				summary = await fetchUserQuotaSummary({
+					accessToken: (cred as { access: string }).access,
+					projectId: (cred as { projectId?: string }).projectId,
+					baseUrl: provider.baseUrl,
+					signal,
+				});
+			} catch (err: unknown) {
+				if (cred.refresh && provider.auth.oauth && String(err).includes("401")) {
+					cred = await provider.auth.oauth.refresh(cred, signal);
+					if (typeof store.addAccount === "function") {
+						await store.addAccount(
+							targetProvider,
+							{ id: acc.id, label: acc.label, credential: cred },
+							acc.id === activeId,
+							options,
+						);
+					}
+					summary = await fetchUserQuotaSummary({
+						accessToken: (cred as { access: string }).access,
+						projectId: (cred as { projectId?: string }).projectId,
+						baseUrl: provider.baseUrl,
+						signal,
+					});
+				} else {
+					throw err;
+				}
+			}
+
+			results.push({
+				providerId: targetProvider,
+				accountId: acc.id,
+				accountLabel: acc.label ?? acc.id,
+				email: (cred as { email?: string }).email,
+				isActive: acc.id === activeId,
+				summary,
+			});
+		}
+
+		return results;
 	}
 
 	async addAccount(

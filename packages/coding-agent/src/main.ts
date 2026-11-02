@@ -174,23 +174,21 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
 				process.stdout.write(`${JSON.stringify(accountsMap, null, 2)}\n`);
 			} else {
 				if (Object.keys(accountsMap).length === 0) {
-					console.log(chalk.dim("No accounts configured. Use 'pi /login <provider>' to add an account."));
+					console.log(chalk.dim("No accounts configured."));
 				}
 				for (const [p, { activeId, accounts }] of Object.entries(accountsMap)) {
-					console.log(chalk.bold.cyan(`Provider: ${p}`));
+					console.log(chalk.bold(p));
 					if (accounts.length === 0) {
-						console.log(chalk.dim("  (No accounts configured)"));
 						continue;
 					}
 					for (const a of accounts) {
 						const isActive = a.id === activeId;
 						const isCooldown = a.cooldownUntil && a.cooldownUntil > Date.now();
 						const cooldownText = isCooldown
-							? chalk.yellow(` [COOLDOWN ${Math.ceil((a.cooldownUntil - Date.now()) / 60000)}m left]`)
+							? chalk.yellow(` ⏳ ${Math.ceil((a.cooldownUntil - Date.now()) / 60000)}m`)
 							: "";
-						const statusMark = isActive ? chalk.green("* [ACTIVE] ") : chalk.dim("  [STANDBY] ");
-						const typeText = chalk.dim(`(${a.credential.type}, id: ${a.id})`);
-						console.log(`${statusMark}${chalk.bold(a.label ?? a.id)} ${typeText}${cooldownText}`);
+						const statusMark = isActive ? chalk.green("● ") : chalk.dim("○ ");
+						console.log(`  ${statusMark}${chalk.bold(a.label ?? a.id)}${cooldownText}`);
 					}
 				}
 			}
@@ -209,6 +207,62 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
 				throw new AuthCommandError(`Account "${accountId}" not found for provider "${provider}".`);
 			}
 			console.log(chalk.green(`Switched active account for "${provider}" to "${accountId}".`));
+			return true;
+		}
+
+		if (command.kind === "usage") {
+			const provider = parsed.provider?.trim() || "antigravity";
+			const accountId = parsed.account?.trim();
+			const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false });
+			const quotas = await modelRuntime.getQuotaSummary({
+				providerId: provider,
+				accountId,
+				signal: AbortSignal.timeout(15_000),
+			});
+
+			if (command.json) {
+				process.stdout.write(`${JSON.stringify(quotas, null, 2)}\n`);
+				return true;
+			}
+
+			const formatBar = (fraction: number, width = 10): string => {
+				const f = Math.max(0, Math.min(1, fraction));
+				const filled = Math.round(f * width);
+				return `[${"█".repeat(filled)}${"░".repeat(width - filled)}] ${Math.round(f * 100)
+					.toString()
+					.padStart(3)}%`;
+			};
+
+			const formatReset = (resetTime?: string): string => {
+				if (!resetTime) return "";
+				const diff = new Date(resetTime).getTime() - Date.now();
+				if (diff <= 0) return "resets soon";
+				const d = Math.floor(diff / 86400000);
+				const h = Math.floor((diff % 86400000) / 3600000);
+				const m = Math.floor((diff % 3600000) / 60000);
+				let timeStr = "";
+				if (d > 0) timeStr = `${d}d ${h}h`;
+				else if (h > 0) timeStr = `${h}h ${m}m`;
+				else timeStr = `${m}m`;
+				return `resets in ${timeStr}`;
+			};
+
+			for (let i = 0; i < quotas.length; i++) {
+				const q = quotas[i]!;
+				const activeTag = q.isActive ? chalk.dim(" (Active)") : "";
+				const emailTag = q.email ? chalk.dim(` <${q.email}>`) : "";
+				console.log(`${chalk.bold(q.accountLabel)}${emailTag}${activeTag}`);
+				for (const g of q.summary.groups) {
+					console.log(`  ${chalk.bold(g.displayName)}`);
+					for (const b of g.buckets) {
+						const windowLabel = b.window === "weekly" ? "Weekly" : b.window === "5h" ? "5-Hour" : b.displayName;
+						const bar = formatBar(b.remainingFraction);
+						const reset = chalk.dim(formatReset(b.resetTime));
+						console.log(`    ${windowLabel.padEnd(8)} ${bar}   ${reset}`);
+					}
+				}
+				if (i < quotas.length - 1) console.log();
+			}
 			return true;
 		}
 

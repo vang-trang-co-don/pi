@@ -35,6 +35,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "clone", description: "Duplicate the current session at the current position" },
 	{ name: "trust", description: "Save project trust decision for future sessions" },
 	{ name: "accounts", description: "Manage and switch multiple accounts per provider", argumentHint: "[provider]" },
+	{ name: "usage", description: "Show remaining model quota and reset times", argumentHint: "[account]" },
 	{ name: "login", description: "Configure provider authentication", argumentHint: "<provider>" },
 	{ name: "logout", description: "Remove provider authentication" },
 	{ name: "new", description: "Start a new session" },

@@ -933,6 +933,51 @@ export const streamSimple: StreamFunction<"google-cloud-code-pa", SimpleStreamOp
 	} satisfies GoogleCloudCodePaOptions);
 };
 
+export interface QuotaBucket {
+	bucketId?: string;
+	displayName: string;
+	window: "weekly" | "5h" | string;
+	remainingFraction: number;
+	resetTime?: string;
+	description?: string;
+}
+
+export interface QuotaGroup {
+	displayName: string;
+	description?: string;
+	buckets: QuotaBucket[];
+}
+
+export interface UserQuotaSummary {
+	groups: QuotaGroup[];
+	description?: string;
+}
+
+export async function fetchUserQuotaSummary(options: {
+	accessToken: string;
+	projectId?: string;
+	baseUrl?: string;
+	signal?: AbortSignal;
+}): Promise<UserQuotaSummary> {
+	const baseUrl = options.baseUrl || "https://cloudcode-pa.googleapis.com";
+	const headers: Record<string, string> = {
+		Authorization: `Bearer ${options.accessToken}`,
+		"Content-Type": "application/json",
+		"User-Agent": getAntigravityUserAgent(),
+	};
+	const response = await fetch(`${baseUrl}/v1internal:retrieveUserQuotaSummary`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify({ project: options.projectId || "aicode-consumers" }),
+		signal: options.signal,
+	});
+	if (!response.ok) {
+		const text = await response.text();
+		throw new Error(`Failed to retrieve user quota (${response.status}): ${text}`);
+	}
+	return (await response.json()) as UserQuotaSummary;
+}
+
 export const googleCloudCodePaApi = (): ProviderStreams => ({
 	stream,
 	streamSimple,
