@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+DIST_CLI="$REPO_ROOT/packages/coding-agent/dist/cli.js"
+
+usage() {
+  cat << 'EOF'
+control-pi - Verification harness for pi coding agent
+
+Usage:
+  control-pi doctor
+  control-pi init <run_id>
+  control-pi launch <run_id> [extra_cli_flags...]
+  control-pi send <run_id> <keys>
+  control-pi capture <run_id> <output_file>
+  control-pi cli <run_id> -- <cli_args...>
+  control-pi rpc <run_id> <json_command>
+  control-pi cleanup <run_id>
+EOF
+  exit 1
+}
+
+SCRATCH_BASE="/tmp/pi-verify"
+
+ensure_env() {
+  local run_id="$1"
+  local target_dir="$SCRATCH_BASE-$run_id"
+  mkdir -p "$target_dir"
+  if [[ ! -f "$target_dir/settings.json" ]]; then
+    cat << EOF > "$target_dir/settings.json"
+{
+  "defaultProvider": "antigravity",
+  "defaultModel": "gemini-3.8-flash",
+  "packages": []
+}
+EOF
+  fi
+  if [[ ! -f "$target_dir/trust.json" ]]; then
+    cat << EOF > "$target_dir/trust.json"
+{
+  "$REPO_ROOT": true
+}
+EOF
+  fi
+  if [[ ! -f "$target_dir/auth.json" && -f "$HOME/.pi/agent/auth.json" ]]; then
+    cp "$HOME/.pi/agent/auth.json" "$target_dir/auth.json"
+  fi
+}
+
+cmd="${1:-}"
+shift || usage
+
+case "$cmd" in
+  doctor)
+    echo "Checking verification dependencies..."
+    if ! command -v node >/dev/null 2>&1; then
+      echo "ERROR: node is not installed or not in PATH."
+      exit 1
+    fi
+    node_version="$(node -v)"
+    echo "Node version: $node_version"
+
+    if [[ ! -f "$DIST_CLI" ]]; then
+      echo "ERROR: $DIST_CLI does not exist. Run 'npm run build' first."
+      exit 1
+    fi
+    echo "CLI bundle: $DIST_CLI found."
+
+    if ! command -v screen >/dev/null 2>&1; then
+      echo "ERROR: screen utility not found in PATH."
+      exit 1
+    fi
+    echo "Screen terminal multiplexer: available."
+
+    if [[ ! -f "$HOME/.pi/agent/auth.json" ]]; then
+      echo "WARNING: $HOME/.pi/agent/auth.json not found. Live API calls may fail."
+    else
+      echo "Auth configuration: found."
+    fi
+    echo "Doctor check: OK"
+    ;;
+
+  init)
+    [[ $# -ge 1 ]] || usage
+    run_id="$1"
+    ensure_env "$run_id"
+    echo "Initialized scratch environment at $SCRATCH_BASE-$run_id"
+    ;;
+
+  launch)
+    [[ $# -ge 1 ]] || usage
+    run_id="$1"
+    shift
+    ensure_env "$run_id"
+    sess="pi-verify-$run_id"
+    target_dir="$SCRATCH_BASE-$run_id"
+
+    # Kill existing session if present
+    screen -S "$sess" -X quit 2>/dev/null || true
+
+    screen -d -m -S "$sess" bash -c "cd '$REPO_ROOT' && PI_CODING_AGENT_DIR='$target_dir' node '$DIST_CLI' $*"
+    # Wait briefly for startup
+    sleep 2
+    echo "Launched session $sess in background."
+    ;;
+
+  send)
+    [[ $# -ge 2 ]] || usage
+    run_id="$1"
+    keys="$2"
+    sess="pi-verify-$run_id"
+    screen -S "$sess" -X stuff "$keys"
+    ;;
+
+  capture)
+    [[ $# -ge 2 ]] || usage
+    run_id="$1"
+    out_file="$2"
+    sess="pi-verify-$run_id"
+    mkdir -p "$(dirname "$out_file")"
+    screen -S "$sess" -X hardcopy "$out_file"
+    echo "Captured terminal state to $out_file"
+    ;;
+
+  cli)
+    [[ $# -ge 2 ]] || usage
+    run_id="$1"
+    shift
+    if [[ "$1" == "--" ]]; then
+      shift
+    fi
+    ensure_env "$run_id"
+    target_dir="$SCRATCH_BASE-$run_id"
+    PI_CODING_AGENT_DIR="$target_dir" node "$DIST_CLI" "$@"
+    ;;
+
+  rpc)
+    [[ $# -ge 2 ]] || usage
+    run_id="$1"
+    json_cmd="$2"
+    ensure_env "$run_id"
+    target_dir="$SCRATCH_BASE-$run_id"
+    echo "$json_cmd" | PI_CODING_AGENT_DIR="$target_dir" node "$DIST_CLI" --mode rpc
+    ;;
+
+  cleanup)
+    [[ $# -ge 1 ]] || usage
+    run_id="$1"
+    sess="pi-verify-$run_id"
+    screen -S "$sess" -X quit 2>/dev/null || true
+    rm -rf "$SCRATCH_BASE-$run_id"
+    echo "Cleaned up session $sess and scratch directory."
+    ;;
+
+  *)
+    usage
+    ;;
+esac
