@@ -7,7 +7,7 @@ Interactive TUI provides the full-screen terminal experience for conversational 
 - `tui-startup` launches into the interactive terminal, displaying context and status bar.
 - `tui-prompt` accepts keyboard input and displays typed text.
 - `tui-slash` recognizes slash commands in the editor.
-- `tui-exit` quits the session cleanly via command or keybinding.
+- `tui-exit` quits the session cleanly via `/quit` command or keybinding.
 
 ## How to get to it (user POV)
 
@@ -22,8 +22,8 @@ Preconditions:
 - `$RUN_ID` is defined.
 
 - **Launch session.** Start an isolated interactive terminal session. Run `./.pi/skills/verify/bin/control-pi launch "$RUN_ID"`.
-- **Verify greeting and context.** Capture the initial rendered state. Run `./.pi/skills/verify/bin/control-pi capture "$RUN_ID" "artifacts/verify/$RUN_ID/initial.txt"`. Inspecting the file shows the Pi banner, loaded context files, and the prompt input line with model name `gemini-3.8-flash`.
-- **Enter slash command.** Send the `/exit` command to initiate graceful shutdown. Run `./.pi/skills/verify/bin/control-pi send "$RUN_ID" "/exit"$'\r'`.
+- **Verify greeting and context.** Capture the initial rendered state. Run `./.pi/skills/verify/bin/control-pi capture "$RUN_ID" "artifacts/verify/$RUN_ID/initial.txt"`. Inspecting the file shows the Pi banner, loaded context files, and the footer status bar displaying model name `gemini-3.8-flash`.
+- **Enter slash command.** Send the `/quit` command to initiate graceful shutdown. Run `./.pi/skills/verify/bin/control-pi send "$RUN_ID" "/quit"$'\r'`.
 - **Capture exit.** Verify session terminates. Run `./.pi/skills/verify/bin/control-pi cleanup "$RUN_ID"`.
 
 ## Gotchas

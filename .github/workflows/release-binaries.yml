@@ -2,14 +2,16 @@ name: Release Binaries
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version to release (e.g. v1.4.0)'
+        description: 'Tag/version to release (e.g. v1.4.0 or nightly)'
         required: false
-        default: 'v1.4.0'
+        default: 'nightly'
         type: string
 
 permissions:
@@ -62,33 +64,50 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          if [ "$TAG" = "main" ] || [ -z "$TAG" ]; then
-            TAG="v1.4.0"
+          IS_NIGHTLY=0
+          if [ "$TAG" = "main" ] || [ -z "$TAG" ] || [ "$TAG" = "nightly" ]; then
+            TAG="nightly"
+            IS_NIGHTLY=1
           fi
 
-          cat << 'EOF' > release-notes.md
-          ### Pi with Antigravity & Multi-Account Support
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          cat << EOF > release-notes.md
+          ### Pi with Antigravity & Multi-Account Support (Nightly - ${COMMIT_SHA})
 
-          Pre-compiled standalone binaries. No Node.js or npm required.
+          Pre-compiled standalone binaries built from commit \`${COMMIT_SHA}\`. No Node.js or npm required.
 
           #### Quick Install:
-          ```bash
+          \`\`\`bash
           curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash
-          ```
+          \`\`\`
 
           #### Included Features:
           - **Antigravity Provider**: Google Cloud Code PA streaming API with OAuth.
           - **Multi-Account Pooling**: Auto-rotate across multiple accounts with in-flight failover.
-          - **Self-Update**: Built-in `pi update` support.
+          - **Self-Update**: Built-in \`pi update\` support.
           EOF
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Updating existing release $TAG..."
-            gh release upload "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS --clobber
+          if [ "$IS_NIGHTLY" = "1" ]; then
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Updating existing nightly release $TAG..."
+              gh release edit "$TAG" --notes-file release-notes.md --title "Pi Nightly (${COMMIT_SHA})" --prerelease
+              gh release upload "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS --clobber
+            else
+              echo "Creating new nightly release $TAG..."
+              gh release create "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS \
+                --title "Pi Nightly (${COMMIT_SHA})" \
+                --notes-file release-notes.md \
+                --prerelease
+            fi
           else
-            echo "Creating new release $TAG..."
-            gh release create "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS \
-              --title "Pi ${TAG} (Antigravity & Multi-Account)" \
-              --notes-file release-notes.md \
-              --latest
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Updating existing release $TAG..."
+              gh release upload "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS --clobber
+            else
+              echo "Creating new release $TAG..."
+              gh release create "$TAG" binaries-out/*.tar.gz binaries-out/*.zip binaries-out/SHA256SUMS \
+                --title "Pi ${TAG} (Antigravity & Multi-Account)" \
+                --notes-file release-notes.md \
+                --latest
+            fi
           fi

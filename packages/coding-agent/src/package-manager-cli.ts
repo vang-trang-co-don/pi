@@ -875,13 +875,10 @@ async function runGitSelfUpdate(gitRoot: string, force: boolean): Promise<boolea
 
 	console.log(chalk.dim("Rebuilding bundles..."));
 	try {
-		execSync(
-			"npx tsc -p packages/ai/tsconfig.build.json && npx tsc -p packages/coding-agent/tsconfig.build.json && node scripts/build-coding-agent-bundle.mjs",
-			{
-				cwd: gitRoot,
-				stdio: "inherit",
-			},
-		);
+		execSync("npm run build", {
+			cwd: gitRoot,
+			stdio: "inherit",
+		});
 	} catch {
 		console.error(chalk.red("Build failed after rebase."));
 		process.exitCode = 1;
@@ -1246,6 +1243,29 @@ export async function handlePackageCommand(
 						return true;
 					}
 
+					const installMethod = detectInstallMethod();
+					if (installMethod === "bun-binary") {
+						console.log(chalk.dim(`Updating ${APP_NAME} binary from latest release...`));
+						try {
+							execSync(
+								"curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash",
+								{
+									stdio: "inherit",
+								},
+							);
+							return true;
+						} catch {
+							console.error(chalk.red("Binary self-update failed. Run the installer manually:"));
+							console.error(
+								chalk.dim(
+									"curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash",
+								),
+							);
+							process.exitCode = 1;
+							return true;
+						}
+					}
+
 					// If running from a git checkout without a managed or configured command, self-update via git
 					const gitRoot =
 						!configuredSelfUpdateArgv && !managedInstallRoot ? findGitRootForSelfUpdate() : undefined;
@@ -1277,29 +1297,6 @@ export async function handlePackageCommand(
 						}
 						console.log(chalk.green(`Updated ${APP_NAME} from ${VERSION} to ${selfUpdatePlan.version}`));
 						return true;
-					}
-
-					const installMethod = detectInstallMethod();
-					if (installMethod === "bun-binary") {
-						console.log(chalk.dim(`Updating ${APP_NAME} binary from latest release...`));
-						try {
-							execSync(
-								"curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash",
-								{
-									stdio: "inherit",
-								},
-							);
-							return true;
-						} catch {
-							console.error(chalk.red("Binary self-update failed. Run the installer manually:"));
-							console.error(
-								chalk.dim(
-									"curl -fsSL https://raw.githubusercontent.com/vang-trang-co-don/pi/main/install.sh | bash",
-								),
-							);
-							process.exitCode = 1;
-							return true;
-						}
 					}
 					if (process.platform === "win32" && installMethod !== "npm" && installMethod !== "pnpm") {
 						console.error(

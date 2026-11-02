@@ -5,12 +5,12 @@ Model catalog commands allow users to inspect supported AI providers, query avai
 ## Sub-features
 
 - `model-list` lists all supported models and their attributes across configured providers.
-- `model-filter` filters listed models by provider name.
+- `model-filter` filters listed models using a fuzzy search pattern matching provider and model ID.
 
 ## How to get to it (user POV)
 
 - Run `pi --list-models` to list all models.
-- Run `pi --list-models <provider>` to filter models for a specific provider (e.g. `pi --list-models antigravity`).
+- Run `pi --list-models [search]` to filter models with a fuzzy search term (e.g. `pi --list-models antigravity` or `pi --list-models gemini`).
 
 ## Driving it with control-pi
 
@@ -25,4 +25,4 @@ Preconditions:
 
 ## Gotchas
 
-- Unauthenticated providers will only show models if their static catalog definitions are registered and offline listing is permitted.
+- Models only appear for providers with valid authentication credentials in `auth.json`. Unauthenticated providers are excluded from the output.

@@ -4,15 +4,15 @@ Extension management allows users to inspect installed packages and tools, insta
 
 ## Sub-features
 
-- `ext-list` displays all globally or locally installed packages and extensions.
+- `ext-list` displays all globally or locally installed packages.
 - `ext-install` adds an extension package to `settings.json`.
-- `ext-remove` unregisters and removes an installed extension.
+- `ext-remove` unregisters and removes an installed package (alias `uninstall`).
 
 ## How to get to it (user POV)
 
-- Run `pi list` to view installed extensions.
-- Run `pi install <source>` to install an extension package.
-- Run `pi remove <source>` to uninstall an extension.
+- Run `pi list` (or `pi list -l` for project-local packages) to view installed packages.
+- Run `pi install <source>` to install a package.
+- Run `pi remove <source>` (or `pi uninstall <source>`) to uninstall a package.
 
 ## Driving it with control-pi
 

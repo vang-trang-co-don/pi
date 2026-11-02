@@ -3,6 +3,7 @@ import { fetchWithRetry } from "./management-http.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
+const GITHUB_CUSTOM_RELEASES_URL = "https://api.github.com/repos/vang-trang-co-don/pi/releases";
 const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
 
 export interface LatestPiRelease {
@@ -97,10 +98,97 @@ export async function getLatestPiVersion(
 export async function checkForNewPiVersion(currentVersion: string): Promise<LatestPiRelease | undefined> {
 	if (process.env.PI_SKIP_VERSION_CHECK) return undefined;
 
+	// In test environments or when explicitly configured, keep checks standard
+	if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+		try {
+			const latestRelease = await getLatestPiRelease(currentVersion);
+			if (latestRelease && isNewerPackageVersion(latestRelease.version, currentVersion)) {
+				return latestRelease;
+			}
+			return undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	// Check custom fork releases first (nightly or latest custom releases)
+	try {
+		const customRelease = await getLatestCustomForkRelease(currentVersion);
+		if (customRelease) {
+			return customRelease;
+		}
+	} catch {
+		// Fall through to standard version check
+	}
+
 	try {
 		const latestRelease = await getLatestPiRelease(currentVersion);
 		if (latestRelease && isNewerPackageVersion(latestRelease.version, currentVersion)) {
 			return latestRelease;
+		}
+		return undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+interface GitHubReleaseItem {
+	tag_name?: string;
+	name?: string;
+	body?: string;
+	prerelease?: boolean;
+	draft?: boolean;
+}
+
+export async function getLatestCustomForkRelease(
+	currentVersion: string,
+	options: { timeoutMs?: number } = {},
+): Promise<LatestPiRelease | undefined> {
+	if (process.env.PI_OFFLINE) return undefined;
+
+	try {
+		const response = await fetchWithRetry(
+			GITHUB_CUSTOM_RELEASES_URL,
+			{
+				headers: {
+					"User-Agent": getPiUserAgent(currentVersion),
+					accept: "application/vnd.github.v3+json",
+				},
+			},
+			{
+				maxRetries: 0,
+				timeoutMs: options.timeoutMs ?? 5000,
+			},
+		);
+		if (!response.ok) return undefined;
+
+		const releases = (await response.json()) as GitHubReleaseItem[];
+		if (!Array.isArray(releases) || releases.length === 0) return undefined;
+
+		// Find the first non-draft release (nightly or standard release)
+		const candidate = releases.find((r) => !r.draft);
+		if (!candidate || !candidate.tag_name) return undefined;
+
+		const tag = candidate.tag_name.trim();
+		// If tag is nightly, check if it's marked as prerelease or different from current version
+		if (tag === "nightly") {
+			const candidateTitle = candidate.name?.trim() || "";
+			// If title mentions a commit SHA or Nightly, format as update
+			return {
+				version: candidateTitle || "nightly",
+				note: candidate.body?.trim()
+					? candidate.body.trim().slice(0, 300)
+					: "Nightly build from latest main commit",
+			};
+		}
+
+		// Otherwise check semver tag (strip leading 'v')
+		const cleanVersion = tag.startsWith("v") ? tag.slice(1) : tag;
+		if (isNewerPackageVersion(cleanVersion, currentVersion)) {
+			return {
+				version: cleanVersion,
+				note: candidate.body?.trim() ? candidate.body.trim().slice(0, 300) : undefined,
+			};
 		}
 		return undefined;
 	} catch {

@@ -4,15 +4,15 @@ CLI print mode executes single-shot queries and scripted tasks without entering 
 
 ## Sub-features
 
-- `cli-print` runs a prompt passed via `-p` and streams text directly to stdout.
-- `cli-offline` verifies local behavior without making network API requests.
-- `cli-files` attaches file context via `@file` arguments on the command line.
+- `cli-print` runs a prompt passed via `-p` and outputs the result to stdout (or streams JSON events with `--mode json`).
+- `cli-offline` disables startup network operations like npm version checks and catalog refreshes without altering provider inference.
+- `cli-files` attaches file context via `@file` arguments separated from the prompt.
 
 ## How to get to it (user POV)
 
 - Run `pi -p "<prompt>"` in a terminal.
-- Run `pi -p --offline "<prompt>"` for local dry-run or mock execution.
-- Run `pi -p "@src/cli.ts explain this file"`.
+- Run `pi -p --offline "<prompt>"` to disable startup update/catalog checks.
+- Run `pi -p @src/cli.ts "explain this file"`.
 
 ## Driving it with control-pi
 
@@ -27,5 +27,5 @@ Preconditions:
 
 ## Gotchas
 
-- Calling print mode with a live provider requires a valid API key in `auth.json`.
-- In offline mode, requests expecting live network responses will intentionally stop at the network boundary.
+- Calling print mode with a live provider requires a valid API key or OAuth credentials in `auth.json`.
+- The `@file` argument must be passed as an independent shell argument separated from the prompt text (e.g. `@path "prompt"`, not `"@path prompt"`).

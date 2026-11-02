@@ -6,15 +6,15 @@ Quota tracking displays real-time model capacity, consumption percentages, and r
 
 - `usage-cli` checks quota from the command line via `pi usage` or `pi auth usage`.
 - `usage-json` outputs structured quota JSON for scripting and monitoring.
-- `usage-multi-account` inspects quota across multiple accounts in a pool via `--account all`.
-- `usage-tui` queries and renders quota within the interactive terminal via `/usage`.
+- `usage-multi-account` inspects quota across multiple accounts in a pool via `--account all` or `/usage all`.
+- `usage-tui` queries and renders quota within the interactive terminal via `/usage` or `/usage <account>`.
 
 ## How to get to it (user POV)
 
 - Run `pi usage` in the terminal.
 - Run `pi usage --json` to get raw JSON output.
 - Run `pi usage --account all` to view quota for all accounts in the pool.
-- Type `/usage` in the interactive TUI editor.
+- Type `/usage` or `/usage all` in the interactive TUI editor.
 
 ## Driving it with control-pi
 

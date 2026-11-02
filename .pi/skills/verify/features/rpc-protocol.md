@@ -1,6 +1,6 @@
 # RPC protocol
 
-RPC mode exposes Pi's full agent runtime over a newline-delimited JSON-RPC stream on stdin and stdout for IDE integrations and subagents.
+RPC mode exposes Pi's full agent runtime over a newline-delimited JSON stream (JSONL) on stdin and stdout for IDE integrations and subagents.
 
 ## Sub-features
 
@@ -21,12 +21,14 @@ Preconditions:
 - `$RUN_ID` is defined.
 
 - **Query agent state.** Send a `get_state` command. Run `./.pi/skills/verify/bin/control-pi rpc "$RUN_ID" '{"id":"req1","type":"get_state"}' > "artifacts/verify/$RUN_ID/rpc-state.json"`.
-- **Assert response.** Confirm JSON output has `success: true` and contains the current model (`gemini-3.8-flash`), thinking level (`medium`), and active session file path.
+- **Assert response.** Confirm the response JSON line with `command: "get_state"` has `success: true` and contains the current model (`data.model.id`), thinking level (`data.thinkingLevel`), and active session file path (`data.sessionFile`).
 - **Query available models.** Send a `get_available_models` command. Run `./.pi/skills/verify/bin/control-pi rpc "$RUN_ID" '{"id":"req2","type":"get_available_models"}' > "artifacts/verify/$RUN_ID/rpc-models.json"`.
-- **Assert models list.** Verify output contains `success: true` and includes `antigravity` and `openai` models.
+- **Assert models list.** Verify output contains `success: true` and includes `data.models` populated with available models.
 - **Cleanup.** Run `./.pi/skills/verify/bin/control-pi cleanup "$RUN_ID"`.
 
 ## Gotchas
 
 - RPC commands must be formatted as single-line JSON; multi-line formatted JSON will fail to parse.
+- State properties and model lists are nested under the `data` property of response objects.
+- Built-in extensions may emit `extension_ui_request` lines on stdout alongside correlated command responses.
 - The prompt command takes `message`, not `prompt`: `{"type":"prompt","message":"..."}`.

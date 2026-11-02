@@ -128,4 +128,26 @@ describe("version checks", () => {
 		await expect(getLatestPiVersion("1.2.3")).resolves.toBe("1.2.4");
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
+
+	it("detects custom fork releases from GitHub", async () => {
+		const { getLatestCustomForkRelease } = await import("../src/utils/version-check.ts");
+
+		const releases = [
+			{
+				tag_name: "nightly",
+				name: "Pi Nightly (826af8c)",
+				body: "Nightly binary build from commit 826af8c",
+				draft: false,
+				prerelease: true,
+			},
+		];
+
+		const fetchMock = vi.fn(async () => Response.json(releases));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await getLatestCustomForkRelease("1.4.0");
+		expect(result).toBeDefined();
+		expect(result?.version).toBe("Pi Nightly (826af8c)");
+		expect(result?.note).toContain("Nightly binary build");
+	});
 });
