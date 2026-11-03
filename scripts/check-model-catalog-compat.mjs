@@ -90,6 +90,24 @@ function main() {
 		console.log(`Checking the model catalog against pi ${release}...`);
 		// The release's source code.
 		const archive = join(temporaryDir, "release.tar");
+		let hasTag = false;
+		try {
+			run("git", ["rev-parse", "--verify", "--quiet", `v${release}^{commit}`], root);
+			hasTag = true;
+		} catch {
+			try {
+				run("git", ["fetch", "--depth=1", "https://github.com/earendil-works/pi.git", "tag", `v${release}`], root);
+				hasTag = true;
+			} catch {
+				// Failed to fetch tag from upstream
+			}
+		}
+
+		if (!hasTag) {
+			console.log(`Skipped: git tag v${release} not found in repository or upstream.`);
+			return;
+		}
+
 		run("git", ["archive", "--prefix=release/", "--output", archive, `v${release}`], root);
 		run("tar", ["xf", archive, "-C", temporaryDir], root);
 
