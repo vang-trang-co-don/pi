@@ -369,6 +369,11 @@ export const antigravityOAuth: OAuthAuth = {
 		const projectId =
 			existingProjectId || (await discoverProject(refreshed.access_token, signal)) || DEFAULT_PROJECT_ID;
 
+		const email =
+			typeof credential.email === "string" && credential.email
+				? credential.email
+				: await getUserEmail(refreshed.access_token, signal);
+
 		return {
 			...credential,
 			type: "oauth",
@@ -376,6 +381,7 @@ export const antigravityOAuth: OAuthAuth = {
 			refresh: refreshed.refresh_token || credential.refresh,
 			expires: Date.now() + refreshed.expires_in * 1000 - 5 * 60 * 1000,
 			projectId,
+			...(email ? { email } : {}),
 		};
 	},
 

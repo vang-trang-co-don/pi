@@ -73,7 +73,7 @@ import {
 } from "@earendil-works/pi-ai/utils/model-operations";
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
-import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { AuthStorage as DefaultAuthStorage, isDefaultAccountLabel } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
@@ -875,8 +875,27 @@ export class ModelRuntime implements Models {
 		}
 		const credential = await store.read(providerId, options);
 		if (!credential) return [];
-		if (credential.type === "pool") return credential.accounts;
-		return [{ id: "default", label: credential.type === "oauth" ? "OAuth Account" : "Default API Key", credential }];
+		if (credential.type === "pool") {
+			return credential.accounts.map((acc) => {
+				const email =
+					(acc.credential as { email?: string; user?: string }).email ||
+					(acc.credential as { email?: string; user?: string }).user;
+				if (email && isDefaultAccountLabel(acc.label)) {
+					return { ...acc, label: email };
+				}
+				return acc;
+			});
+		}
+		const email =
+			(credential as { email?: string; user?: string }).email ||
+			(credential as { email?: string; user?: string }).user;
+		return [
+			{
+				id: "default",
+				label: email || (credential.type === "oauth" ? "OAuth Account" : "Default API Key"),
+				credential,
+			},
+		];
 	}
 
 	async switchAccount(providerId: string, accountId: string, options?: AuthOperationOptions): Promise<boolean> {
@@ -1047,7 +1066,12 @@ export class ModelRuntime implements Models {
 	): Promise<AccountPoolCredential> {
 		const signal = operationSignal(interaction.signal);
 		return this.enqueueCredentialOperation(providerId, signal, async () => {
-			const newCred = await this.models.login(providerId, type, { ...interaction, signal }, options);
+			const newCred = await this.models.login(
+				providerId,
+				type,
+				{ ...interaction, signal },
+				{ ...options, persist: false },
+			);
 			const store = this.credentials.backingStore;
 			let pool: AccountPoolCredential;
 			if ("addAccount" in store && typeof (store as { addAccount: unknown }).addAccount === "function") {
@@ -1062,10 +1086,13 @@ export class ModelRuntime implements Models {
 					}
 				).addAccount(providerId, { label, credential: newCred }, true, { signal });
 			} else {
+				const email =
+					(newCred as { email?: string; user?: string }).email ||
+					(newCred as { email?: string; user?: string }).user;
 				pool = {
 					type: "pool",
 					activeId: "account-1",
-					accounts: [{ id: "account-1", label: label || "Account 1", credential: newCred as any }],
+					accounts: [{ id: "account-1", label: label || email || "Account 1", credential: newCred as any }],
 				};
 				await store.modify(providerId, async () => pool, { signal });
 			}

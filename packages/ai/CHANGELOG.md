@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `persist` option to `LoginOptions` and `Models.login()` to allow authenticating credentials without mutating the store
+
 ## [1.5.0] - 2026-11-02
 
 ### Breaking Changes

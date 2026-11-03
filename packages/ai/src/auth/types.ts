@@ -242,6 +242,11 @@ export interface LoginOptions {
 	 * Codex originator. Defaults to pi's own name.
 	 */
 	agentName?: string;
+	/**
+	 * Whether to persist the credential into the credential store. Defaults to true.
+	 * When false, the credential is authenticated and returned without modifying storage.
+	 */
+	persist?: boolean;
 }
 
 /**

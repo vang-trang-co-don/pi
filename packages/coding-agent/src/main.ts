@@ -41,7 +41,7 @@ import {
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
-import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
+import { AuthStorage, getAccountDisplayLabel, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
@@ -181,6 +181,13 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
 					if (accounts.length === 0) {
 						continue;
 					}
+					const labelCounts = new Map<string, number>();
+					for (const a of accounts) {
+						const lbl = getAccountDisplayLabel(a);
+						labelCounts.set(lbl, (labelCounts.get(lbl) ?? 0) + 1);
+					}
+					const labelIndex = new Map<string, number>();
+
 					for (const a of accounts) {
 						const isActive = a.id === activeId;
 						const isCooldown = a.cooldownUntil && a.cooldownUntil > Date.now();
@@ -188,7 +195,14 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
 							? chalk.yellow(` ⏳ ${Math.ceil((a.cooldownUntil - Date.now()) / 60000)}m`)
 							: "";
 						const statusMark = isActive ? chalk.green("● ") : chalk.dim("○ ");
-						console.log(`  ${statusMark}${chalk.bold(a.label ?? a.id)}${cooldownText}`);
+						const baseLabel = getAccountDisplayLabel(a);
+						let displayLabel = baseLabel;
+						if ((labelCounts.get(baseLabel) ?? 0) > 1) {
+							const idx = (labelIndex.get(baseLabel) ?? 0) + 1;
+							labelIndex.set(baseLabel, idx);
+							displayLabel = `${baseLabel} (#${idx})`;
+						}
+						console.log(`  ${statusMark}${chalk.bold(displayLabel)}${cooldownText}`);
 					}
 				}
 			}

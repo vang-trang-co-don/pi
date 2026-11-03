@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Display account email instead of generic "OAuth" label in `/accounts` selector and auth CLI, and prevent overwriting existing provider credentials when adding accounts to a pool
 - Prevented false "Update Available" notification on startup when running the latest nightly release by matching the commit SHA against the current binary or git HEAD
 
 

@@ -923,6 +923,27 @@ describe("Models runtime", () => {
 		expect(await credentials.read("p1")).toBeUndefined();
 	});
 
+	it("models.login with persist: false returns the credential without modifying credential store", async () => {
+		const credentials = new InMemoryCredentialStore();
+		await credentials.modify("p1", async () => ({ type: "api_key", key: "original-key" }));
+		const apiKey = envKeyAuth(undefined);
+		apiKey.login = async () => ({ type: "api_key", key: "new-key" });
+		const models = createModels({ credentials });
+		models.setProvider(testProvider({ id: "p1", auth: { apiKey } }));
+
+		const credential = await models.login(
+			"p1",
+			"api_key",
+			{
+				prompt: async () => "unused",
+				notify: () => {},
+			},
+			{ persist: false },
+		);
+		expect(credential).toEqual({ type: "api_key", key: "new-key" });
+		expect(await credentials.read("p1")).toEqual({ type: "api_key", key: "original-key" });
+	});
+
 	it("a stored credential without a matching handler blocks ambient fallback", async () => {
 		const credentials = new InMemoryCredentialStore();
 		const models = createModels({ credentials });

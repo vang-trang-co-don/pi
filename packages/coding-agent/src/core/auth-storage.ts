@@ -454,8 +454,9 @@ export class AuthStorage implements CredentialStore {
 		options?.signal?.throwIfAborted();
 		if (credential?.type === "pool") {
 			const resolvedAccounts = credential.accounts.map((acc) => {
+				let resolvedAcc = acc;
 				if (acc.credential.type === "api_key" && acc.credential.key !== undefined) {
-					return {
+					resolvedAcc = {
 						...acc,
 						credential: {
 							...acc.credential,
@@ -463,7 +464,13 @@ export class AuthStorage implements CredentialStore {
 						},
 					};
 				}
-				return acc;
+				const email =
+					(resolvedAcc.credential as { email?: string; user?: string }).email ||
+					(resolvedAcc.credential as { email?: string; user?: string }).user;
+				if (email && isDefaultAccountLabel(resolvedAcc.label)) {
+					return { ...resolvedAcc, label: email };
+				}
+				return resolvedAcc;
 			});
 			return { ...credential, accounts: resolvedAccounts };
 		}
@@ -517,7 +524,7 @@ export class AuthStorage implements CredentialStore {
 				return {
 					providerId,
 					type: credential.type,
-					activeLabel: active?.label ?? credential.activeId,
+					activeLabel: active ? getAccountDisplayLabel(active) : credential.activeId,
 					accountCount: credential.accounts.length,
 				};
 			}
@@ -530,7 +537,15 @@ export class AuthStorage implements CredentialStore {
 		const credential = await this.read(providerId, options);
 		if (!credential) return [];
 		if (credential.type === "pool") {
-			return credential.accounts;
+			return credential.accounts.map((acc) => {
+				const email =
+					(acc.credential as { email?: string; user?: string }).email ||
+					(acc.credential as { email?: string; user?: string }).user;
+				if (email && isDefaultAccountLabel(acc.label)) {
+					return { ...acc, label: email };
+				}
+				return acc;
+			});
 		}
 		const email =
 			(credential as { email?: string; user?: string }).email ||
@@ -562,9 +577,12 @@ export class AuthStorage implements CredentialStore {
 			providerId,
 			async (current) => {
 				const newId = entry.id || `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+				const newEmail =
+					(entry.credential as { email?: string; user?: string }).email ||
+					(entry.credential as { email?: string; user?: string }).user;
 				const newAccount: AccountEntry = {
 					id: newId,
-					label: entry.label || (entry.credential.type === "oauth" ? "OAuth Account" : "API Key"),
+					label: entry.label || newEmail || (entry.credential.type === "oauth" ? "OAuth Account" : "API Key"),
 					credential: entry.credential,
 				};
 
@@ -594,9 +612,13 @@ export class AuthStorage implements CredentialStore {
 				}
 
 				// Converting single credential to pool
+				const currentEmail =
+					(current as { email?: string; user?: string }).email ||
+					(current as { email?: string; user?: string }).user;
 				const firstAccount: AccountEntry = {
 					id: "account-1",
-					label: current.type === "oauth" ? "Primary Account (OAuth)" : "Primary Account (API Key)",
+					label:
+						currentEmail || (current.type === "oauth" ? "Primary Account (OAuth)" : "Primary Account (API Key)"),
 					credential: current,
 				};
 				resultPool = {
@@ -664,6 +686,42 @@ export class AuthStorage implements CredentialStore {
 	): Promise<{ rotated: boolean; activeAccount?: AccountEntry }> {
 		return rotateAccountInStore(this, providerId, failedAccountId, cooldownMs, options?.signal);
 	}
+}
+
+/**
+ * Check if a label is a placeholder or automatically generated default label.
+ */
+export function isDefaultAccountLabel(label?: string): boolean {
+	if (!label) return true;
+	const normalized = label.trim().toLowerCase();
+	return (
+		normalized === "oauth" ||
+		normalized === "oauth account" ||
+		normalized === "primary account (oauth)" ||
+		normalized === "primary account (api key)" ||
+		normalized === "primary account" ||
+		normalized === "api key" ||
+		normalized === "default api key" ||
+		normalized === "account 1" ||
+		normalized === "account-1" ||
+		normalized === "default" ||
+		/^acc_[a-z0-9_]+$/i.test(normalized)
+	);
+}
+
+/**
+ * Return display-friendly label for an account, preferring email/username if label is default or missing.
+ */
+export function getAccountDisplayLabel(acc: { id: string; label?: string; credential?: unknown }): string {
+	const cred = acc.credential as { email?: unknown; user?: unknown } | undefined;
+	const email =
+		(typeof cred?.email === "string" && cred.email.trim()) ||
+		(typeof cred?.user === "string" && cred.user.trim()) ||
+		undefined;
+	if (email && isDefaultAccountLabel(acc.label)) {
+		return email;
+	}
+	return acc.label ?? email ?? acc.id;
 }
 
 /**

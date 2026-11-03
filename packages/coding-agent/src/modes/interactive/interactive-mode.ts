@@ -68,6 +68,7 @@ import {
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+import { getAccountDisplayLabel } from "../../core/auth-storage.ts";
 import {
 	CACHE_TTL_MS,
 	type CacheMiss,
@@ -6013,6 +6014,13 @@ export class InteractiveMode {
 			const now = Date.now();
 			const accountByOption = new Map<string, (typeof accounts)[0]>();
 
+			const labelCounts = new Map<string, number>();
+			for (const acc of accounts) {
+				const lbl = getAccountDisplayLabel(acc);
+				labelCounts.set(lbl, (labelCounts.get(lbl) ?? 0) + 1);
+			}
+			const labelIndex = new Map<string, number>();
+
 			for (const acc of accounts) {
 				const isCooldown = acc.cooldownUntil && acc.cooldownUntil > now;
 				const statusBadge = isCooldown
@@ -6022,7 +6030,14 @@ export class InteractiveMode {
 							? "● "
 							: "○ "
 						: "";
-				const optLabel = `${statusBadge}${acc.label ?? acc.id}`;
+				const baseLabel = getAccountDisplayLabel(acc);
+				let displayLabel = baseLabel;
+				if ((labelCounts.get(baseLabel) ?? 0) > 1) {
+					const idx = (labelIndex.get(baseLabel) ?? 0) + 1;
+					labelIndex.set(baseLabel, idx);
+					displayLabel = `${baseLabel} (#${idx})`;
+				}
+				const optLabel = `${statusBadge}${displayLabel}`;
 				options.push(optLabel);
 				accountByOption.set(optLabel, acc);
 			}
@@ -6050,8 +6065,15 @@ export class InteractiveMode {
 				if (selected === removeAccountLabel) {
 					this.showSelector((removeDone) => {
 						const removeAccountByOption = new Map<string, (typeof accounts)[0]>();
+						const removeLabelIndex = new Map<string, number>();
 						const removeOptions = accounts.map((a) => {
-							const lbl = a.label ?? a.id;
+							const base = getAccountDisplayLabel(a);
+							let lbl = base;
+							if ((labelCounts.get(base) ?? 0) > 1) {
+								const idx = (removeLabelIndex.get(base) ?? 0) + 1;
+								removeLabelIndex.set(base, idx);
+								lbl = `${base} (#${idx})`;
+							}
 							removeAccountByOption.set(lbl, a);
 							return lbl;
 						});
@@ -6061,7 +6083,7 @@ export class InteractiveMode {
 							const toRemove = removeAccountByOption.get(removeOpt);
 							if (toRemove) {
 								await this.session.modelRuntime.removeAccount(providerId, toRemove.id);
-								this.showStatus(`Removed ${toRemove.label ?? toRemove.id}.`);
+								this.showStatus(`Removed ${getAccountDisplayLabel(toRemove)}.`);
 							}
 						};
 						const onRemoveCancel = () => {
@@ -6085,7 +6107,7 @@ export class InteractiveMode {
 				if (chosenAccount) {
 					await this.session.modelRuntime.switchAccount(providerId, chosenAccount.id);
 					this.showStatus(
-						`Active account for ${providerName} switched to: ${chosenAccount.label ?? chosenAccount.id}`,
+						`Active account for ${providerName} switched to: ${getAccountDisplayLabel(chosenAccount)}`,
 					);
 				}
 			};
