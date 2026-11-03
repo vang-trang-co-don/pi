@@ -42,7 +42,13 @@ import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/chi
 import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
 import { getPiUserAgent } from "./utils/pi-user-agent.ts";
 import { stripBom } from "./utils/text.ts";
-import { formatVersionCheckError, getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
+import {
+	formatVersionCheckError,
+	getCurrentCommitSha,
+	getLatestCustomForkRelease,
+	getLatestPiRelease,
+	isNewerPackageVersion,
+} from "./utils/version-check.ts";
 import {
 	cleanupWindowsSelfUpdateQuarantine,
 	quarantineWindowsNativeDependencies,
@@ -1245,6 +1251,14 @@ export async function handlePackageCommand(
 
 					const installMethod = detectInstallMethod();
 					if (installMethod === "bun-binary") {
+						const forkRelease = await getLatestCustomForkRelease(VERSION);
+						if (!options.force && !forkRelease) {
+							const currentSha = getCurrentCommitSha();
+							const versionDisplay = currentSha ? `v${VERSION} (${currentSha.slice(0, 7)})` : `v${VERSION}`;
+							console.log(chalk.green(`${APP_NAME} is already up to date (${versionDisplay})`));
+							return true;
+						}
+
 						console.log(chalk.dim(`Updating ${APP_NAME} binary from latest release...`));
 						try {
 							execSync(

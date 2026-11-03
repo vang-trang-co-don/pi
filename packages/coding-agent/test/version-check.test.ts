@@ -3,6 +3,8 @@ import {
 	checkForNewPiVersion,
 	comparePackageVersions,
 	formatVersionCheckError,
+	getCurrentCommitSha,
+	getLatestCustomForkRelease,
 	getLatestPiRelease,
 	getLatestPiVersion,
 	isNewerPackageVersion,
@@ -17,6 +19,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	delete process.env.PI_COMMIT_SHA;
 	if (originalSkipVersionCheck === undefined) {
 		delete process.env.PI_SKIP_VERSION_CHECK;
 	} else {
@@ -129,9 +132,8 @@ describe("version checks", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
-	it("detects custom fork releases from GitHub", async () => {
-		const { getLatestCustomForkRelease } = await import("../src/utils/version-check.ts");
-
+	it("detects custom fork releases from GitHub when newer commit", async () => {
+		process.env.PI_COMMIT_SHA = "1111111";
 		const releases = [
 			{
 				tag_name: "nightly",
@@ -149,5 +151,34 @@ describe("version checks", () => {
 		expect(result).toBeDefined();
 		expect(result?.version).toBe("Pi Nightly (826af8c)");
 		expect(result?.note).toContain("Nightly binary build");
+	});
+
+	it("does not report update when current commit matches nightly release", async () => {
+		process.env.PI_COMMIT_SHA = "826af8c9e123456";
+		const releases = [
+			{
+				tag_name: "nightly",
+				name: "Pi Nightly (826af8c)",
+				body: "Nightly binary build from commit 826af8c",
+				draft: false,
+				prerelease: true,
+			},
+		];
+
+		const fetchMock = vi.fn(async () => Response.json(releases));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await getLatestCustomForkRelease("1.4.0");
+		expect(result).toBeUndefined();
+	});
+
+	it("resolves current commit sha from environment or git", () => {
+		process.env.PI_COMMIT_SHA = "abcdef123456";
+		expect(getCurrentCommitSha()).toBe("abcdef123456");
+
+		delete process.env.PI_COMMIT_SHA;
+		const gitSha = getCurrentCommitSha();
+		expect(gitSha).toBeDefined();
+		expect(gitSha).toMatch(/^[a-f0-9]{40}$/);
 	});
 });

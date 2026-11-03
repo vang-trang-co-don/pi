@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevented false "Update Available" notification on startup when running the latest nightly release by matching the commit SHA against the current binary or git HEAD
+
+
 ## [1.5.0] - 2026-11-02
 
 ### New Features

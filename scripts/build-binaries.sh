@@ -143,6 +143,7 @@ COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
 for platform in "${PLATFORMS[@]}"; do
     if [[ -n "$COMMIT_SHA" ]]; then
         echo "$COMMIT_SHA" > "$OUTPUT_DIR/$platform/.commit_sha"
+        echo "$COMMIT_SHA" > "$OUTPUT_DIR/$platform/commit_sha"
     fi
     cp package.json "$OUTPUT_DIR/$platform/"
     cp README.md "$OUTPUT_DIR/$platform/"

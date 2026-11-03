@@ -108,9 +108,9 @@ if [ "$PLATFORM_OS" = "windows" ]; then
 else
   tar -xzf "$TMP_DIR/$ARCHIVE_NAME" -C "$TMP_DIR"
   if [ -d "$TMP_DIR/pi" ]; then
-    cp -r "$TMP_DIR/pi/"* "$INSTALL_DIR/"
+    cp -a "$TMP_DIR/pi/." "$INSTALL_DIR/"
   else
-    cp -r "$TMP_DIR/"* "$INSTALL_DIR/"
+    cp -a "$TMP_DIR/." "$INSTALL_DIR/"
   fi
 fi
 

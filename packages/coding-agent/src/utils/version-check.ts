@@ -1,6 +1,11 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { compare, valid } from "semver";
+import { getPackageDir, isBunBinary } from "../config.ts";
+import { spawnProcessSync } from "./child-process.ts";
 import { fetchWithRetry } from "./management-http.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
+import { stripBom } from "./text.ts";
 
 const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
 const GITHUB_CUSTOM_RELEASES_URL = "https://api.github.com/repos/vang-trang-co-don/pi/releases";
@@ -132,12 +137,64 @@ export async function checkForNewPiVersion(currentVersion: string): Promise<Late
 	}
 }
 
+export function getCurrentCommitSha(): string | undefined {
+	if (process.env.PI_COMMIT_SHA) {
+		const envSha = process.env.PI_COMMIT_SHA.trim();
+		if (envSha) return envSha;
+	}
+
+	try {
+		const packageDir = getPackageDir();
+		const dotShaFile = join(packageDir, ".commit_sha");
+		if (existsSync(dotShaFile)) {
+			const sha = readFileSync(dotShaFile, "utf-8").trim();
+			if (sha) return sha;
+		}
+
+		const shaFile = join(packageDir, "commit_sha");
+		if (existsSync(shaFile)) {
+			const sha = readFileSync(shaFile, "utf-8").trim();
+			if (sha) return sha;
+		}
+
+		const buildInfoFile = join(packageDir, "build-info.json");
+		if (existsSync(buildInfoFile)) {
+			const info = JSON.parse(stripBom(readFileSync(buildInfoFile, "utf-8"))) as {
+				commit?: string;
+				shortCommit?: string;
+			};
+			if (info.commit?.trim()) return info.commit.trim();
+			if (info.shortCommit?.trim()) return info.shortCommit.trim();
+		}
+	} catch {
+		// Ignore filesystem errors when reading commit metadata
+	}
+
+	try {
+		const result = spawnProcessSync("git", ["rev-parse", "HEAD"], {
+			encoding: "utf-8",
+			timeout: 1000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		if (result.status === 0 && result.stdout) {
+			const sha = result.stdout.trim();
+			if (sha) return sha;
+		}
+	} catch {
+		// Ignore git errors (not a git repo or git not found)
+	}
+
+	return undefined;
+}
+
 interface GitHubReleaseItem {
 	tag_name?: string;
 	name?: string;
 	body?: string;
 	prerelease?: boolean;
 	draft?: boolean;
+	published_at?: string;
+	created_at?: string;
 }
 
 export async function getLatestCustomForkRelease(
@@ -170,10 +227,41 @@ export async function getLatestCustomForkRelease(
 		if (!candidate || !candidate.tag_name) return undefined;
 
 		const tag = candidate.tag_name.trim();
-		// If tag is nightly, check if it's marked as prerelease or different from current version
 		if (tag === "nightly") {
 			const candidateTitle = candidate.name?.trim() || "";
-			// If title mentions a commit SHA or Nightly, format as update
+			const commitMatch =
+				candidateTitle.match(/\(([a-f0-9]{7,40})\)/i) ??
+				candidate.body?.match(/commit [`']?([a-f0-9]{7,40})[`']?/i);
+			const candidateSha = commitMatch ? commitMatch[1].toLowerCase() : undefined;
+			const currentSha = getCurrentCommitSha();
+
+			// If both commit SHAs are known, check if they match
+			if (currentSha && candidateSha) {
+				const normCurrent = currentSha.toLowerCase();
+				if (normCurrent.startsWith(candidateSha) || candidateSha.startsWith(normCurrent)) {
+					return undefined;
+				}
+			}
+
+			// If running as a standalone binary and current commit is unknown, check mtime vs published date
+			if (isBunBinary && !currentSha && (candidate.published_at || candidate.created_at)) {
+				try {
+					const releaseTime = new Date(candidate.published_at || candidate.created_at!).getTime();
+					const binaryMtime = statSync(process.execPath).mtimeMs;
+					if (binaryMtime >= releaseTime) {
+						return undefined;
+					}
+				} catch {
+					// Fall through if stat fails
+				}
+			}
+
+			// If not a binary and not running from a git checkout, don't notify nightly binaries
+			if (!isBunBinary && !currentSha) {
+				return undefined;
+			}
+
+			// There is a newer nightly release available
 			return {
 				version: candidateTitle || "nightly",
 				note: candidate.body?.trim()
